@@ -6,7 +6,8 @@ use crate::render;
 
 #[derive(Debug, Default)]
 pub struct SProc {
-    // TODO: pid, ppid, cmd, memory?
+    // TODO: ppid, cmd, memory?
+    pub pid: i32,
     pub name: String,
     pub cpu_ewma: f64,
     // TODO: use circular buffer? fixed window?
@@ -19,6 +20,7 @@ impl From<&Process> for SProc {
     fn from(p: &Process) -> Self {
         let du = p.disk_usage();
         Self {
+            pid: p.pid(),
             name: p.name().into(),
             cpu_ewma: p.cpu_usage().into(),
             cpu_hist: vec![p.cpu_usage().into()],
@@ -40,7 +42,8 @@ impl SProc {
 
     pub fn render(&self) -> String {
         format!(
-            "{}\tcpu (ewma): {:.1} {:>30}",
+            "{:>6} {:<12} cpu-e: {:4.1} {:>30}",
+            self.pid,
             self.name,
             self.cpu_ewma,
             render::render_vec(&self.cpu_hist, 100.)
