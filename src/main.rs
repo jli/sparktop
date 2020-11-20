@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use log;
+use ordered_float::OrderedFloat as OrdFloat;
 use pretty_env_logger;
 use structopt::StructOpt;
 use sysinfo::{ProcessExt, SystemExt, System};
@@ -17,6 +18,8 @@ struct Opt {
     pid: Option<i32>,
     #[structopt(short, default_value = "30")]
     num_iters: usize,
+    #[structopt(short, default_value = "2.")]
+    delay: f64,
     // weight given to new samples.
     #[structopt(short, default_value = "0.5")]
     ewma_weight: f64,
@@ -35,6 +38,7 @@ fn main() -> Result<()> {
     for _ in 0..opt.num_iters {
         // TODO: refresh_processes() doesn't seem to work?
         sys.refresh_all();
+
         // add latest data to sprocs
         let latest_procs = sys.get_processes();
         for (&pid, proc) in latest_procs {
@@ -46,6 +50,7 @@ fn main() -> Result<()> {
                 .and_modify(|sp| sp.add_sample(proc, opt.ewma_weight))
                 .or_insert(proc.into());
         }
+
         // clean up dead processes
         let dead_pids: Vec<i32> = sprocs.keys()
             .filter(|&p| !latest_procs.contains_key(p))
@@ -55,17 +60,17 @@ fn main() -> Result<()> {
             log::debug!("removing dead pid: {}", dead_pid);
             sprocs.remove(&dead_pid);
         }
+
         // render the remainder
         let mut sprocs: Vec<_> = sprocs.values().collect();
-        sprocs.sort_by(|s1, s2| s1.cpu_ewma.partial_cmp(&s2.cpu_ewma).unwrap().reverse());
+        sprocs.sort_by_key(|sp| OrdFloat(-sp.cpu_ewma));  // negation for highest first
         println!("\n\n#processes {}", sprocs.len());
         for sproc in sprocs {
-            if sproc.cpu_ewma < 0.5 {
-                break;
-            }
+            if sproc.cpu_ewma < 1. { break; }
             println!("{}", sproc.render())
         }
-        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        std::thread::sleep(std::time::Duration::from_secs_f64(opt.delay));
     }
     Ok(())
 }
