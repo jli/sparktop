@@ -8,8 +8,10 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1"
+crossterm = "0"
 log = "0"
 ordered-float = "2"
 pretty_env_logger = "0"
 structopt = "0"
 sysinfo = "0"
+tui = { version = "0", default-features = false, features = ['crossterm'] }

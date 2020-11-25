@@ -7,6 +7,11 @@ use pretty_env_logger;
 use structopt::StructOpt;
 use sysinfo::{ProcessExt, SystemExt, System};
 
+use tui::Terminal;
+use tui::backend::CrosstermBackend;
+use tui::widgets::{Block, Borders, BorderType, Table, Row, Widget};
+use tui::layout::{Layout, Constraint, Direction};
+
 mod render;
 mod sproc;
 
@@ -25,15 +30,52 @@ struct Opt {
     ewma_weight: f64,
 }
 
+struct STerm {
+    terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
+}
+
+impl STerm {
+    fn new() -> Result<Self> {
+        let stdout = std::io::stdout();
+        let backend = CrosstermBackend::new(stdout);
+        let terminal = tui::Terminal::new(backend)?;
+        Ok(Self { terminal })
+    }
+
+    fn draw(&mut self, sprocs: &Vec<&SProc>) -> Result<()> {
+        self.terminal.clear()?;
+        self.terminal.draw(|f| {
+            let rects = Layout::default()
+                .constraints([Constraint::Percentage(100)].as_ref())
+                .margin(0)
+                .split(f.size());
+            let header = ["pid", "process", "CPU-e", "cpu history"];
+            let rows = sprocs.iter().map(|sp| {
+                Row::Data(vec![sp.pid.to_string(), sp.name.clone(), sp.cpu_ewma.to_string(), render::render_vec(&sp.cpu_hist, 100.)].iter())
+            });
+            let tab = Table::new(header.iter(), rows)
+                .block(Block::default().borders(Borders::ALL).title("Table"))
+                .widths(&[
+                    Constraint::Percentage(50),
+                ]);
+            f.render_widget(tab, rects[0]);
+        })?;
+        Ok(())
+    }
+}
+
 fn main() -> Result<()> {
     // std::env::set_var("RUST_LOG", "debug");
     std::env::set_var("RUST_LOG", "info");
     pretty_env_logger::init();
 
+
     let opt = Opt::from_args();
     println!("hi ✨");
     let mut sys = System::new_all();
     let mut sprocs: HashMap<i32, SProc> = HashMap::new();
+
+    let mut term = STerm::new()?;
 
     for _ in 0..opt.num_iters {
         // TODO: refresh_processes() doesn't seem to work?
@@ -64,11 +106,7 @@ fn main() -> Result<()> {
         // render the remainder
         let mut sprocs: Vec<_> = sprocs.values().collect();
         sprocs.sort_by_key(|sp| OrdFloat(-sp.cpu_ewma));  // negation for highest first
-        println!("\n\n#processes {}", sprocs.len());
-        for sproc in sprocs {
-            if sproc.cpu_ewma < 1. { break; }
-            println!("{}", sproc.render())
-        }
+        term.draw(&sprocs)?;
 
         std::thread::sleep(std::time::Duration::from_secs_f64(opt.delay));
     }
