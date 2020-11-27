@@ -40,7 +40,8 @@ impl SProc {
         self.disk_write.push(du.written_bytes);
     }
 
-    pub fn render(&self) -> String {
+    // TODO: maybe remove.
+    pub fn _render(&self) -> String {
         format!(
             "{:>6} {:<12} cpu-e: {:4.1} {:>30}",
             self.pid,
