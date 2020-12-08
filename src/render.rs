@@ -1,8 +1,14 @@
 // Rendering logic.
 
+// TODO: how to make this function take bool 'reverse' flag?
+// this gives type error:
+// let mut it = xs.into_iter();
+// if reverse {
+//     it = it.rev().into_iter();
+// }
 pub fn render_vec(xs: &Vec<f64>, max: f64) -> String {
     let mut r = String::new();
-    for x in xs {
+    for x in xs.iter().rev() {
         let p = *x / max;
         r.push(float_bar(p));
     }

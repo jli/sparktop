@@ -10,7 +10,7 @@ pub struct SProc {
     pub pid: i32,
     pub name: String,
     pub cpu_ewma: f64,
-    // TODO: use circular buffer? fixed window?
+    // TODO: replace w/ https://doc.rust-lang.org/beta/std/collections/vec_deque/struct.VecDeque.html
     pub cpu_hist: Vec<f64>,
     pub disk_read: Vec<u64>,
     pub disk_write: Vec<u64>,

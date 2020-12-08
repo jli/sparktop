@@ -9,7 +9,8 @@ use sysinfo::{ProcessExt, System, SystemExt};
 
 use tui::backend::CrosstermBackend;
 use tui::layout::{Constraint, Layout};
-use tui::widgets::{Block, Borders, Row, Table};
+use tui::widgets::{Row, Table};
+use tui::style::{Modifier, Style};
 use tui::Terminal;
 
 mod render;
@@ -47,10 +48,13 @@ impl STerm {
         self.terminal.draw(|f| {
             let rects = Layout::default()
                 .constraints([Constraint::Percentage(100)].as_ref())
-                .margin(0)
                 .split(f.size());
-            let header = ["pid", "process", "CPU-e", "cpu history"];
+            let header = ["pid", "process", "cpu*", "cpu history"];
             let rows = sprocs.iter().map(|sp| {
+                // TODO: problem w/ cpu hist rendering:
+                // - not aligned in time. when starting a new proc, the drawing starts from the left
+                // - after accumulating too much data, bar stops updating
+                // current workaround: most recent sample first (left). but that might be weird..?
                 let d = vec![
                     sp.pid.to_string(),
                     sp.name.clone(),
@@ -62,8 +66,14 @@ impl STerm {
             });
             // TODO: how to mix length and percentage?
             let tab = Table::new(header.iter(), rows)
-                .block(Block::default().borders(Borders::ALL).title("Table"))
-                .widths(&[Constraint::Length(6), Constraint::Length(24), Constraint::Length(5), Constraint::Percentage(99)]);
+                .header_gap(0)
+                .header_style(Style::default().add_modifier(Modifier::UNDERLINED))
+                .widths(&[
+                    Constraint::Length(6),
+                    Constraint::Length(24),
+                    Constraint::Length(4),
+                    Constraint::Min(10),
+                ]);
             f.render_widget(tab, rects[0]);
         })?;
         Ok(())
