@@ -11,6 +11,7 @@ use tui::Terminal;
 
 use crate::{render, sproc::SProc};
 
+#[derive(Copy, Clone)]
 enum SortBy {
     Cpu,
     Mem,
@@ -110,7 +111,9 @@ impl View {
 
     pub fn draw(&mut self, sprocs: &mut Vec<&SProc>) -> Result<()> {
         self.sort(sprocs);
+        // erhm.
         let alert = self.alert.clone();
+        let sort_by = self.sort_by.clone();
         self.terminal.clear()?;
         self.terminal.draw(|f| {
             let main_constraints = if alert.is_some() {
@@ -125,33 +128,8 @@ impl View {
             // Draw main panel.
             // TODO: yuck
             let main = rects[if alert.is_some() { 1 } else { 0 }];
-            let header = ["pid", "process", "mem", "d_r", "d_w", "cpu", "cpu history"];
-            let rows = sprocs.iter().map(|sp| {
-                let d = vec![
-                    sp.pid.to_string(),
-                    sp.name.clone(),
-                    format!("{:.1}", sp.mem_mb),
-                    render_disk_bytes(sp.disk_read_ewma),
-                    render_disk_bytes(sp.disk_write_ewma),
-                    sp.cpu_ewma.to_string(),
-                    render::render_vec(&sp.cpu_hist, 100.),
-                ];
-                // LEARN: why doesn't .iter() work?
-                Row::Data(d.into_iter())
-            });
-            let tab = Table::new(header.iter(), rows)
-                .header_gap(0)
-                .header_style(Style::default().add_modifier(Modifier::UNDERLINED))
-                .widths(&[
-                    Constraint::Length(6),
-                    Constraint::Length(24),
-                    Constraint::Length(5),
-                    Constraint::Length(5),
-                    Constraint::Length(5),
-                    Constraint::Length(4),
-                    Constraint::Min(10),
-                ]);
-            f.render_widget(tab, main);
+            let table = make_table(sprocs, sort_by);
+            f.render_widget(table, main);
 
             // Draw alert.
             if let Some(alert) = alert {
@@ -162,4 +140,45 @@ impl View {
         })?;
         Ok(())
     }
+}
+
+// TODO: oof. figure out how to make this dynamic.
+const HEADER: [&str; 7] = ["pid", "process", "mem", "dr", "dw", "cpu", "cpu history"];
+
+// LEARN: oof, what's up with this type signature dude.
+fn make_table<'a>(
+    sprocs: &Vec<&SProc>,
+    _sort_by: SortBy,
+) -> Table<'a, core::slice::Iter<'a, &'a str>, std::vec::IntoIter<Row<std::vec::IntoIter<String>>>> {
+    // LEARN: the collect is just to get a more manageable type :/
+    let rows: Vec<_> = sprocs
+        .iter()
+        .map(|sp| {
+            let d = vec![
+                sp.pid.to_string(),
+                sp.name.clone(),
+                format!("{:.1}", sp.mem_mb),
+                render_disk_bytes(sp.disk_read_ewma),
+                render_disk_bytes(sp.disk_write_ewma),
+                sp.cpu_ewma.to_string(),
+                render::render_vec(&sp.cpu_hist, 100.),
+            ];
+            // LEARN: why doesn't .iter() work?
+            let it = d.into_iter();
+            Row::Data(it)
+        })
+        .collect();
+    let tab = Table::new(HEADER.iter(), rows.into_iter())
+        .header_gap(0)
+        .header_style(Style::default().add_modifier(Modifier::UNDERLINED))
+        .widths(&[
+            Constraint::Length(6),
+            Constraint::Length(24),
+            Constraint::Length(5),
+            Constraint::Length(5),
+            Constraint::Length(5),
+            Constraint::Length(4),
+            Constraint::Min(10),
+        ]);
+    tab
 }
