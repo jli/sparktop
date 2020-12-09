@@ -35,6 +35,10 @@ struct STerm {
     terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
 }
 
+fn render_disk_bytes(b: f64) -> String {
+    if b < 0.05 { String::from("_") } else { b.to_string() }
+}
+
 impl STerm {
     fn new() -> Result<Self> {
         let stdout = std::io::stdout();
@@ -49,7 +53,7 @@ impl STerm {
             let rects = Layout::default()
                 .constraints([Constraint::Percentage(100)].as_ref())
                 .split(f.size());
-            let header = ["pid", "process", "cpu*", "cpu history"];
+            let header = ["pid", "process", "mem", "d_r", "d_w", "cpu", "cpu history"];
             let rows = sprocs.iter().map(|sp| {
                 // TODO: problem w/ cpu hist rendering:
                 // - not aligned in time. when starting a new proc, the drawing starts from the left
@@ -58,6 +62,9 @@ impl STerm {
                 let d = vec![
                     sp.pid.to_string(),
                     sp.name.clone(),
+                    format!("{:.1}", sp.mem_mb),
+                    render_disk_bytes(sp.disk_read_ewma),
+                    render_disk_bytes(sp.disk_write_ewma),
                     sp.cpu_ewma.to_string(),
                     render::render_vec(&sp.cpu_hist, 100.),
                 ];
@@ -71,6 +78,9 @@ impl STerm {
                 .widths(&[
                     Constraint::Length(6),
                     Constraint::Length(24),
+                    Constraint::Length(5),
+                    Constraint::Length(5),
+                    Constraint::Length(5),
                     Constraint::Length(4),
                     Constraint::Min(10),
                 ]);
