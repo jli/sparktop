@@ -1,11 +1,7 @@
-use std::collections::HashMap;
-
 use anyhow::Result;
-use log;
 use ordered_float::OrderedFloat as OrdFloat;
 use pretty_env_logger;
 use structopt::StructOpt;
-use sysinfo::{ProcessExt, System, SystemExt};
 
 use tui::backend::CrosstermBackend;
 use tui::layout::{Constraint, Layout};
@@ -15,13 +11,13 @@ use tui::Terminal;
 
 mod render;
 mod sproc;
+mod sprocs;
 
 use sproc::SProc;
+use sprocs::SProcs;
 
 #[derive(StructOpt)]
 struct Opt {
-    #[structopt(short)]
-    pid: Option<i32>,
     #[structopt(short)]
     num_iters: Option<usize>,
     #[structopt(short, default_value = "2.")]
@@ -31,7 +27,7 @@ struct Opt {
     ewma_weight: f64,
 }
 
-struct STerm {
+struct View {
     terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
 }
 
@@ -39,7 +35,7 @@ fn render_disk_bytes(b: f64) -> String {
     if b < 0.05 { String::from("_") } else { b.to_string() }
 }
 
-impl STerm {
+impl View {
     fn new() -> Result<Self> {
         let stdout = std::io::stdout();
         let backend = CrosstermBackend::new(stdout);
@@ -47,8 +43,9 @@ impl STerm {
         Ok(Self { terminal })
     }
 
-    fn draw(&mut self, sprocs: &Vec<&SProc>) -> Result<()> {
+    fn draw(&mut self, sprocs: &mut Vec<&SProc>) -> Result<()> {
         self.terminal.clear()?;
+        sprocs.sort_by_key(|sp| OrdFloat(-sp.cpu_ewma)); // negation for highest first
         self.terminal.draw(|f| {
             let rects = Layout::default()
                 .constraints([Constraint::Percentage(100)].as_ref())
@@ -94,49 +91,14 @@ fn main() -> Result<()> {
     // std::env::set_var("RUST_LOG", "debug");
     std::env::set_var("RUST_LOG", "info");
     pretty_env_logger::init();
+    let opt: Opt = Opt::from_args();
 
-    let opt = Opt::from_args();
-    println!("hi ✨");
-    let mut sys = System::new_all();
-    let mut sprocs: HashMap<i32, SProc> = HashMap::new();
-
-    let mut term = STerm::new()?;
-
+    let mut sprocs = SProcs::new();
+    let mut view = View::new()?;
     let mut i = 0;
     loop {
-        // TODO: refresh_processes() doesn't seem to work?
-        sys.refresh_all();
-
-        // add latest data to sprocs
-        let latest_procs = sys.get_processes();
-        for (&pid, proc) in latest_procs {
-            if let Some(pid_filter) = opt.pid {
-                if pid != pid_filter {
-                    continue;
-                }
-            }
-            log::debug!("handling {} {} {}", pid, proc.name(), proc.cpu_usage());
-            sprocs
-                .entry(pid)
-                .and_modify(|sp| sp.add_sample(proc, opt.ewma_weight))
-                .or_insert(proc.into());
-        }
-
-        // clean up dead processes
-        let dead_pids: Vec<i32> = sprocs
-            .keys()
-            .filter(|&p| !latest_procs.contains_key(p))
-            .map(|&p| p)
-            .collect();
-        for dead_pid in dead_pids {
-            log::debug!("removing dead pid: {}", dead_pid);
-            sprocs.remove(&dead_pid);
-        }
-
-        // render the remainder
-        let mut sprocs: Vec<_> = sprocs.values().collect();
-        sprocs.sort_by_key(|sp| OrdFloat(-sp.cpu_ewma)); // negation for highest first
-        term.draw(&sprocs)?;
+        sprocs.update(opt.ewma_weight);
+        view.draw(&mut sprocs.get().collect())?;
 
         i += 1;
         if let Some(limit) = opt.num_iters {
