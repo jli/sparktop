@@ -1,9 +1,7 @@
-// Process type.
+/// SProc: a single process.
 
 use std::collections::VecDeque;
 use sysinfo::{Process, ProcessExt};
-
-use crate::render;
 
 const SAMPLE_LIMIT: usize = 60;
 
@@ -61,16 +59,5 @@ impl SProc {
         push_sample(&mut self.cpu_hist, p.cpu_usage().into(), SAMPLE_LIMIT);
         push_sample(&mut self.disk_read_hist, du.read_bytes, SAMPLE_LIMIT);
         push_sample(&mut self.disk_write_hist, du.written_bytes, SAMPLE_LIMIT);
-    }
-
-    // TODO: maybe remove.
-    pub fn _render(&self) -> String {
-        format!(
-            "{:>6} {:<12} cpu-e: {:4.1} {:>30}",
-            self.pid,
-            self.name,
-            self.cpu_ewma,
-            render::render_vec(&self.cpu_hist, 100.)
-        )
     }
 }

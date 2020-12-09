@@ -1,3 +1,5 @@
+/// SProcs: a collection of all processes on the system.
+
 use std::collections::{HashMap, hash_map::Values};
 
 use sysinfo::{ProcessExt, System, SystemExt};

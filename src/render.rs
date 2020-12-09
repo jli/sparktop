@@ -1,4 +1,4 @@
-// Rendering logic.
+/// Rendering logic.
 
 pub fn render_vec<'a, II>(xs: II, max: f64) -> String
 where
