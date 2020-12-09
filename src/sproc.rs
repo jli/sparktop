@@ -1,8 +1,11 @@
 // Process type.
 
+use std::collections::VecDeque;
 use sysinfo::{Process, ProcessExt};
 
 use crate::render;
+
+const SAMPLE_LIMIT: usize = 60;
 
 #[derive(Debug, Default)]
 pub struct SProc {
@@ -10,10 +13,9 @@ pub struct SProc {
     pub pid: i32,
     pub name: String,
     pub cpu_ewma: f64,
-    // TODO: replace w/ https://doc.rust-lang.org/beta/std/collections/vec_deque/struct.VecDeque.html
-    pub cpu_hist: Vec<f64>,
-    pub disk_read: Vec<u64>,
-    pub disk_write: Vec<u64>,
+    pub cpu_hist: VecDeque<f64>,
+    pub disk_read: VecDeque<u64>,
+    pub disk_write: VecDeque<u64>,
 }
 
 impl From<&Process> for SProc {
@@ -23,11 +25,17 @@ impl From<&Process> for SProc {
             pid: p.pid(),
             name: p.name().into(),
             cpu_ewma: p.cpu_usage().into(),
-            cpu_hist: vec![p.cpu_usage().into()],
-            disk_read: vec![du.read_bytes],
-            disk_write: vec![du.written_bytes],
+            // TODO: how does this work..?
+            cpu_hist: vec![p.cpu_usage().into()].into(),
+            disk_read: vec![du.read_bytes].into(),
+            disk_write: vec![du.written_bytes].into(),
         }
     }
+}
+
+fn push_sample<T>(deq: &mut VecDeque<T>, x: T, limit: usize) {
+    deq.push_front(x);
+    deq.truncate(limit);
 }
 
 impl SProc {
@@ -35,9 +43,9 @@ impl SProc {
         let du = p.disk_usage();
         let cpu64: f64 = p.cpu_usage().into();
         self.cpu_ewma = cpu64 * ewma_weight + self.cpu_ewma * (1. - ewma_weight);
-        self.cpu_hist.push(p.cpu_usage().into());
-        self.disk_read.push(du.read_bytes);
-        self.disk_write.push(du.written_bytes);
+        push_sample(&mut self.cpu_hist, p.cpu_usage().into(), SAMPLE_LIMIT);
+        push_sample(&mut self.disk_read, du.read_bytes, SAMPLE_LIMIT);
+        push_sample(&mut self.disk_write, du.written_bytes, SAMPLE_LIMIT);
     }
 
     // TODO: maybe remove.
