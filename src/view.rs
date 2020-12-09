@@ -5,18 +5,36 @@ use ordered_float::OrderedFloat as OrdFloat;
 
 use tui::backend::CrosstermBackend;
 use tui::layout::{Constraint, Layout};
-use tui::widgets::{Row, Table};
 use tui::style::{Modifier, Style};
+use tui::widgets::{Row, Table};
 use tui::Terminal;
 
 use crate::{render, sproc::SProc};
 
+enum SortBy {
+    Cpu,
+    Mem,
+    DiskRead,
+    DiskWrite,
+    DiskTotal,
+}
+enum Dir {
+    Asc,
+    Desc,
+}
+
 pub struct View {
     terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
+    sort_by: SortBy,
+    sort_dir: Dir,
 }
 
 fn render_disk_bytes(b: f64) -> String {
-    if b < 0.05 { String::from("_") } else { b.to_string() }
+    if b < 0.05 {
+        String::from("_")
+    } else {
+        b.to_string()
+    }
 }
 
 impl View {
@@ -24,12 +42,32 @@ impl View {
         let stdout = std::io::stdout();
         let backend = CrosstermBackend::new(stdout);
         let terminal = tui::Terminal::new(backend)?;
-        Ok(Self { terminal })
+        Ok(Self {
+            terminal,
+            sort_by: SortBy::Cpu,
+            sort_dir: Dir::Desc,
+        })
+    }
+
+    fn sort(&self, sprocs: &mut Vec<&SProc>) {
+        sprocs.sort_by_key(|&sp| {
+            let val = match self.sort_by {
+                SortBy::Cpu => sp.cpu_ewma,
+                SortBy::Mem => sp.mem_mb,
+                SortBy::DiskRead => sp.disk_read_ewma,
+                SortBy::DiskWrite => sp.disk_write_ewma,
+                SortBy::DiskTotal => sp.disk_read_ewma + sp.disk_write_ewma,
+            };
+            match self.sort_dir {
+                Dir::Asc => OrdFloat(val),
+                Dir::Desc => OrdFloat(-val),
+            }
+        });
     }
 
     pub fn draw(&mut self, sprocs: &mut Vec<&SProc>) -> Result<()> {
+        self.sort(sprocs);
         self.terminal.clear()?;
-        sprocs.sort_by_key(|sp| OrdFloat(-sp.cpu_ewma)); // negation for highest first
         self.terminal.draw(|f| {
             let rects = Layout::default()
                 .constraints([Constraint::Percentage(100)].as_ref())
