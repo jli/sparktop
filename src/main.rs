@@ -2,18 +2,18 @@ use anyhow::Result;
 use pretty_env_logger;
 use structopt::StructOpt;
 
+mod event;
 mod render;
 mod sproc;
 mod sprocs;
 mod view;
 
+use event::{Event, EventStream};
 use sprocs::SProcs;
 use view::View;
 
 #[derive(StructOpt)]
 struct Opt {
-    #[structopt(short)]
-    num_iters: Option<usize>,
     #[structopt(short, default_value = "1.")]
     delay: f64,
     // weight given to new samples.
@@ -29,18 +29,21 @@ fn main() -> Result<()> {
 
     let mut sprocs = SProcs::new();
     let mut view = View::new()?;
-    let mut i = 0;
+    let mut events = EventStream::new(std::time::Duration::from_secs_f64(opt.delay));
     loop {
-        sprocs.update(opt.ewma_weight);
-        view.draw(&mut sprocs.get().collect())?;
-
-        i += 1;
-        if let Some(limit) = opt.num_iters {
-            if i >= limit {
-                break;
+        match events.next() {
+            Event::Resize => {
+                view.draw(&mut sprocs.get().collect())?;
+            }
+            Event::Key(k) => {
+                view.handle_key(k);
+                view.draw(&mut sprocs.get().collect())?;
+            }
+            Event::Tick => {
+                sprocs.update(opt.ewma_weight);
+                view.draw(&mut sprocs.get().collect())?;
             }
         }
-        std::thread::sleep(std::time::Duration::from_secs_f64(opt.delay));
     }
-    Ok(())
+    // Note: no Ok because it's unreachable.
 }

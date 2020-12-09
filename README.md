@@ -4,11 +4,16 @@ top, but like with sparkles ✨
 
 ## wishlist 📝
 
-- per-process cpu usage history
+- [x] per-process cpu usage history
   - instead of just showing most recent sample, can show EWMA
   - can draw sparklines ▁▂▁▄▅▄
 - aggregation: group processes together by app name, or parent, by custom regex, etc
 - include wait time? read/writes?
+- interactions:
+  - [x] sort by other values
+  - show other graphs
+  - show/hide columns
+  - process view: show higher-res cpu, disk graphs
 
 ## inspo / places to steal from
 

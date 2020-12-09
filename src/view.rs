@@ -1,12 +1,12 @@
 /// View: rendering the UI, interactions.
-
 use anyhow::Result;
 use ordered_float::OrderedFloat as OrdFloat;
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tui::backend::CrosstermBackend;
 use tui::layout::{Constraint, Layout};
 use tui::style::{Modifier, Style};
-use tui::widgets::{Row, Table};
+use tui::widgets::{Block, Borders, Paragraph, Row, Table};
 use tui::Terminal;
 
 use crate::{render, sproc::SProc};
@@ -18,15 +18,27 @@ enum SortBy {
     DiskWrite,
     DiskTotal,
 }
+
 enum Dir {
     Asc,
     Desc,
+}
+
+impl Dir {
+    fn flip(&mut self) {
+        use Dir::*;
+        match self {
+            Asc => *self = Desc,
+            Desc => *self = Asc,
+        }
+    }
 }
 
 pub struct View {
     terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
     sort_by: SortBy,
     sort_dir: Dir,
+    alert: Option<String>,
 }
 
 fn render_disk_bytes(b: f64) -> String {
@@ -42,10 +54,13 @@ impl View {
         let stdout = std::io::stdout();
         let backend = CrosstermBackend::new(stdout);
         let terminal = tui::Terminal::new(backend)?;
+        // Needed to process key events as they come.
+        crossterm::terminal::enable_raw_mode()?;
         Ok(Self {
             terminal,
             sort_by: SortBy::Cpu,
             sort_dir: Dir::Desc,
+            alert: None,
         })
     }
 
@@ -65,19 +80,53 @@ impl View {
         });
     }
 
+    pub fn handle_key(&mut self, key: KeyEvent) {
+        let mut unhandled = false;
+        match key.code {
+            KeyCode::Char('M') => self.sort_by = SortBy::Mem,
+            KeyCode::Char('P') => self.sort_by = SortBy::Cpu,
+            KeyCode::Char('R') => self.sort_by = SortBy::DiskRead,
+            KeyCode::Char('W') => self.sort_by = SortBy::DiskWrite,
+            KeyCode::Char('D') => self.sort_by = SortBy::DiskTotal,
+            KeyCode::Char('I') => self.sort_dir.flip(),
+            // TODO: nicer exit method...
+            KeyCode::Char('q') => panic!("quitting"),
+            KeyCode::Esc => (), // clear alert
+            KeyCode::Char('l') => {
+                // if l but no ctrl, consider unhandled.
+                if !key.modifiers.contains(KeyModifiers::CONTROL) {
+                    unhandled = true;
+                } // else (ctrl-l) clear alert
+            }
+            _ => unhandled = true,
+        }
+
+        if unhandled {
+            self.alert = Some(format!("unhandled key: {:?}", key));
+        } else {
+            self.alert = None;
+        }
+    }
+
     pub fn draw(&mut self, sprocs: &mut Vec<&SProc>) -> Result<()> {
         self.sort(sprocs);
+        let alert = self.alert.clone();
         self.terminal.clear()?;
         self.terminal.draw(|f| {
+            let main_constraints = if alert.is_some() {
+                vec![Constraint::Percentage(5), Constraint::Percentage(95)]
+            } else {
+                vec![Constraint::Min(1)]
+            };
             let rects = Layout::default()
-                .constraints([Constraint::Percentage(100)].as_ref())
+                .constraints(main_constraints)
                 .split(f.size());
+
+            // Draw main panel.
+            // TODO: yuck
+            let main = rects[if alert.is_some() { 1 } else { 0 }];
             let header = ["pid", "process", "mem", "d_r", "d_w", "cpu", "cpu history"];
             let rows = sprocs.iter().map(|sp| {
-                // TODO: problem w/ cpu hist rendering:
-                // - not aligned in time. when starting a new proc, the drawing starts from the left
-                // - after accumulating too much data, bar stops updating
-                // current workaround: most recent sample first (left). but that might be weird..?
                 let d = vec![
                     sp.pid.to_string(),
                     sp.name.clone(),
@@ -87,10 +136,9 @@ impl View {
                     sp.cpu_ewma.to_string(),
                     render::render_vec(&sp.cpu_hist, 100.),
                 ];
-                // Learn: why doesn't .iter() work?
+                // LEARN: why doesn't .iter() work?
                 Row::Data(d.into_iter())
             });
-            // TODO: how to mix length and percentage?
             let tab = Table::new(header.iter(), rows)
                 .header_gap(0)
                 .header_style(Style::default().add_modifier(Modifier::UNDERLINED))
@@ -103,7 +151,14 @@ impl View {
                     Constraint::Length(4),
                     Constraint::Min(10),
                 ]);
-            f.render_widget(tab, rects[0]);
+            f.render_widget(tab, main);
+
+            // Draw alert.
+            if let Some(alert) = alert {
+                let extra = rects[0];
+                let msg = Paragraph::new(alert).block(Block::default().borders(Borders::ALL));
+                f.render_widget(msg, extra)
+            }
         })?;
         Ok(())
     }
