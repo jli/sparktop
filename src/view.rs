@@ -139,21 +139,19 @@ impl View {
             } else {
                 vec![Constraint::Min(1)]
             };
-            let rects = Layout::default()
+            let mut rects = Layout::default()
                 .constraints(main_constraints)
                 .split(f.size());
 
             // Draw main panel.
-            // TODO: better way of handling when alert is present?
-            let main = rects[if alert.is_some() { 1 } else { 0 }];
+            let main = rects.pop().unwrap(); // main panel last rect
             let proc_table = ProcTable::new(sprocs, sort_by);
             f.render_widget(proc_table.get_table(), main);
 
             // Draw alert.
             if let Some(alert) = alert {
-                let extra = rects[0];
                 let msg = Paragraph::new(alert).block(Block::default().borders(Borders::ALL));
-                f.render_widget(msg, extra)
+                f.render_widget(msg, rects[0])
             }
         })?;
         Ok(())
