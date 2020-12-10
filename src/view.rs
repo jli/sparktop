@@ -135,7 +135,7 @@ impl View {
         self.terminal.clear()?;
         self.terminal.draw(|f| {
             let main_constraints = if alert.is_some() {
-                vec![Constraint::Percentage(5), Constraint::Percentage(95)]
+                vec![Constraint::Min(3), Constraint::Min(1)]
             } else {
                 vec![Constraint::Min(1)]
             };
@@ -163,17 +163,10 @@ struct ProcTable<'a> {
     sprocs: &'a Vec<&'a SProc>,
 }
 
-// LEARN: oof, what's up with this type signature dude.
-type MyTable<'a> =
-    Table<'a, core::slice::Iter<'a, String>, std::vec::IntoIter<Row<std::vec::IntoIter<String>>>>;
-
 impl<'a> ProcTable<'a> {
     fn new(sprocs: &'a Vec<&SProc>, sort_by: Metric) -> Self {
         use Metric::*;
-        let mut header: Vec<String> = vec!["pid", "process"]
-            .iter()
-            .map(|&s| String::from(s))
-            .collect();
+        let mut header = vec![String::from("pid"), String::from("process")];
         header.extend(
             [DiskRead, DiskWrite, Mem, Cpu]
                 .iter()
@@ -183,13 +176,10 @@ impl<'a> ProcTable<'a> {
         Self { header, sprocs }
     }
 
-    fn get_table(&self) -> MyTable {
-        // LEARN: the collect is just to get a more manageable type :/
-        let rows: Vec<_> = self
-            .sprocs
-            .iter()
-            .map(|sp| {
-                let d = vec![
+    fn get_table(&self) -> impl tui::widgets::Widget + '_ {
+        let rows = self.sprocs.iter().map(|sp| {
+            Row::Data(
+                vec![
                     sp.pid.to_string(),
                     sp.name.clone(),
                     render_disk_bytes(sp.disk_read_ewma),
@@ -197,13 +187,11 @@ impl<'a> ProcTable<'a> {
                     format!("{:.1}", sp.mem_mb),
                     sp.cpu_ewma.to_string(),
                     render::render_vec(&sp.cpu_hist, 100.),
-                ];
-                // LEARN: why doesn't .iter() work?
-                let it = d.into_iter();
-                Row::Data(it)
-            })
-            .collect();
-        let tab = Table::new(self.header.iter(), rows.into_iter())
+                ]
+                .into_iter(),
+            )
+        });
+        Table::new(self.header.iter(), rows)
             .header_gap(0)
             .header_style(Style::default().add_modifier(Modifier::UNDERLINED))
             .widths(&[
@@ -214,7 +202,6 @@ impl<'a> ProcTable<'a> {
                 Constraint::Length(5),
                 Constraint::Length(4),
                 Constraint::Min(10),
-            ]);
-        tab
+            ])
     }
 }
