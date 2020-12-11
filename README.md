@@ -14,6 +14,8 @@ top, but like with sparkles ✨
   - show other graphs
   - show/hide columns
   - process view: show higher-res cpu, disk graphs
+  - filtering
+- feature: figure out more stable ranking for "busy" processes so the list doesn't jump around as much. sorting by memory is pretty good, but also include high-cpu low-mem things.
 
 ## inspo / places to steal from
 

@@ -60,11 +60,12 @@ pub struct View {
     alert: Option<String>,
 }
 
-fn render_disk_bytes(b: f64) -> String {
-    if b < 0.05 {
+// hide low values
+fn render_metric(m: f64) -> String {
+    if m < 0.05 {
         String::from("_")
     } else {
-        b.to_string()
+        format!("{:.1}", m)
     }
 }
 
@@ -182,10 +183,10 @@ impl<'a> ProcTable<'a> {
                 vec![
                     sp.pid.to_string(),
                     sp.name.clone(),
-                    render_disk_bytes(sp.disk_read_ewma),
-                    render_disk_bytes(sp.disk_write_ewma),
-                    format!("{:.1}", sp.mem_mb),
-                    sp.cpu_ewma.to_string(),
+                    render_metric(sp.disk_read_ewma),
+                    render_metric(sp.disk_write_ewma),
+                    render_metric(sp.mem_mb),
+                    render_metric(sp.cpu_ewma),
                     render::render_vec(&sp.cpu_hist, 100.),
                 ]
                 .into_iter(),
