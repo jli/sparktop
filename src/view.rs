@@ -179,7 +179,7 @@ impl<'a> ProcTable<'a> {
 
     fn get_table(&self) -> impl tui::widgets::Widget + '_ {
         let rows = self.sprocs.iter().map(|sp| {
-            Row::Data(
+            Row::new(
                 vec![
                     sp.pid.to_string(),
                     sp.name.clone(),
@@ -192,9 +192,12 @@ impl<'a> ProcTable<'a> {
                 .into_iter(),
             )
         });
-        Table::new(self.header.iter(), rows)
-            .header_gap(0)
-            .header_style(Style::default().add_modifier(Modifier::UNDERLINED))
+        Table::new(rows)
+            .header(
+                // TODO: way to avoid making copy?
+                Row::new(self.header.to_vec())
+                    .style(Style::default().add_modifier(Modifier::UNDERLINED)),
+            )
             .widths(&[
                 Constraint::Length(6),
                 Constraint::Length(24),
