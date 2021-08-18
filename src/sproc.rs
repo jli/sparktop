@@ -1,5 +1,4 @@
 /// SProc: a single process.
-
 use std::collections::VecDeque;
 use sysinfo::{Process, ProcessExt};
 
@@ -30,7 +29,7 @@ impl From<&Process> for SProc {
             // TODO: how does the final into() work?
             cpu_hist: vec![p.cpu_usage().into()].into(),
             mem_mb: (p.memory() as f64) / 1024.,
-            disk_read_ewma: du.read_bytes as f64,  // TODO: how come no into()?
+            disk_read_ewma: du.read_bytes as f64, // TODO: how come no into()?
             disk_read_hist: vec![du.read_bytes].into(),
             disk_write_ewma: du.written_bytes as f64,
             disk_write_hist: vec![du.written_bytes].into(),

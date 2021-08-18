@@ -2,6 +2,11 @@
 
 top, but like with sparkles ✨
 
+top can't answer "what caused everything to be slow like 30 seconds ago?" but
+sparktop can!
+
+![demo](sparktop.png)
+
 ## wishlist 📝
 
 - [x] per-process cpu usage history
@@ -15,6 +20,7 @@ top, but like with sparkles ✨
   - show/hide columns
   - process view: show higher-res cpu, disk graphs
   - filtering
+  - killing
 - feature: figure out more stable ranking for "busy" processes so the list doesn't jump around as much. sorting by memory is pretty good, but also include high-cpu low-mem things.
 
 ## inspo / places to steal from

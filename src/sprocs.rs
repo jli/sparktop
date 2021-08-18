@@ -1,6 +1,5 @@
 /// SProcs: a collection of all processes on the system.
-
-use std::collections::{HashMap, hash_map::Values};
+use std::collections::{hash_map::Values, HashMap};
 
 use sysinfo::{ProcessExt, System, SystemExt};
 
@@ -32,7 +31,8 @@ impl SProcs {
         }
 
         // clean up dead processes
-        let dead_pids: Vec<i32> = self.sprocs
+        let dead_pids: Vec<i32> = self
+            .sprocs
             .keys()
             .filter(|&p| !latest_procs.contains_key(p))
             .map(|&p| p)
