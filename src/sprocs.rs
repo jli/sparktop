@@ -19,8 +19,12 @@ impl SProcs {
     }
 
     pub fn update(&mut self, ewma_weight: f64) {
-        // TODO: refresh_processes() doesn't seem to work?
-        self.sys.refresh_all();
+        // Not completely sure why, but we need to refresh cpu immediately
+        // before processes for refresh_processes to include cpu usage. This
+        // isn't totally crazy, modern cpu power save features can scale things
+        // and bust readings.
+        self.sys.refresh_cpu();
+        self.sys.refresh_processes();
         let latest_procs = self.sys.get_processes();
         for (&pid, proc) in latest_procs {
             log::debug!("handling {} {} {}", pid, proc.name(), proc.cpu_usage());
