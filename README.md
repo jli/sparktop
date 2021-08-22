@@ -35,11 +35,6 @@ sparktop can!
   - can display all in detailed view, kill all, etc.
   - some notion of filtering/searching?
 
-cleanups:
-- make tui rendering better:
-  - deal with flashing (double buffer?)
-  - don't wreck terminal after quitting
-
 ## inspo / places to steal from
 
 - [bottom](https://github.com/ClementTsang/bottom/blob/309ebd8dc3ba35f80c93a296ebc688813e988d03/src/lib.rs#L348)
