@@ -25,7 +25,7 @@ impl SProcs {
         // and bust readings.
         self.sys.refresh_cpu();
         self.sys.refresh_processes();
-        let latest_procs = self.sys.get_processes();
+        let latest_procs = self.sys.processes();
         for (&pid, proc) in latest_procs {
             log::debug!("handling {} {} {}", pid, proc.name(), proc.cpu_usage());
             self.sprocs
