@@ -3,13 +3,12 @@ use anyhow::Result;
 use ordered_float::OrderedFloat as OrdFloat;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use tui::backend::CrosstermBackend;
 use tui::layout::{Constraint, Layout};
 use tui::style::{Modifier, Style};
 use tui::widgets::{Block, Borders, Paragraph, Row, Table};
-use tui::Terminal;
 
 use crate::event::Next;
+use crate::sterm::STerm;
 use crate::{render, sproc::SProc};
 
 #[derive(Copy, Clone, PartialEq)]
@@ -55,7 +54,7 @@ impl Dir {
 }
 
 pub struct View {
-    terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
+    sterm: STerm,
     sort_by: Metric,
     sort_dir: Dir,
     alert: Option<String>,
@@ -72,13 +71,8 @@ fn render_metric(m: f64) -> String {
 
 impl View {
     pub fn new() -> Result<Self> {
-        let stdout = std::io::stdout();
-        let backend = CrosstermBackend::new(stdout);
-        let terminal = tui::Terminal::new(backend)?;
-        // Needed to process key events as they come.
-        crossterm::terminal::enable_raw_mode()?;
         Ok(Self {
-            terminal,
+            sterm: STerm::new(),
             sort_by: Metric::Cpu,
             sort_dir: Dir::Desc,
             alert: None,
@@ -112,10 +106,7 @@ impl View {
             KeyCode::Char('D') => self.sort_by = Metric::DiskTotal,
             KeyCode::Char('I') => self.sort_dir.flip(),
             KeyCode::Char('q') => {
-                // fixes terminal offset weirdness
-                crossterm::terminal::disable_raw_mode().unwrap();
-                // clear old state
-                self.terminal.clear().unwrap();
+                // note: terminal cleanup happens automatically via STerm::drop
                 next = Next::Quit;
             }
             KeyCode::Esc => (), // clear alert
@@ -142,8 +133,8 @@ impl View {
         // erhm, borrow checker workarounds...
         let alert = self.alert.clone();
         let sort_by = self.sort_by.clone();
-        self.terminal.clear()?;
-        self.terminal.draw(|f| {
+        self.sterm.clear()?;
+        self.sterm.draw(|f| {
             let main_constraints = if alert.is_some() {
                 vec![Constraint::Min(3), Constraint::Min(1)]
             } else {

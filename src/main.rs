@@ -1,10 +1,12 @@
 use anyhow::Result;
 use structopt::StructOpt;
 
+// LEARN: why do i need to mention these here?
 mod event;
 mod render;
 mod sproc;
 mod sprocs;
+mod sterm;
 mod view;
 
 use event::{Event, EventStream, Next};
