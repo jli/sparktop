@@ -30,22 +30,17 @@ fn main() -> Result<()> {
     let mut view = View::new()?;
     let mut events = EventStream::new(std::time::Duration::from_secs_f64(opt.delay));
     loop {
-        let mut next = Next::Continue;
-        match events.next() {
-            Event::Resize => {
-                view.draw(&mut sprocs.get().collect())?;
-            }
-            Event::Key(k) => {
-                next = view.handle_key(k);
-                view.draw(&mut sprocs.get().collect())?;
-            }
+        let next = match events.next() {
+            Event::Resize => Next::Continue,
+            Event::Key(k) => view.handle_key(k),
             Event::Tick => {
                 sprocs.update(opt.ewma_weight);
-                view.draw(&mut sprocs.get().collect())?;
+                Next::Continue
             }
-        }
-        if next == Next::Quit {
-            break;
+        };
+        match next {
+            Next::Continue => view.draw(&mut sprocs.get().collect())?,
+            Next::Quit => break,
         }
     }
     Ok(())

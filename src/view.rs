@@ -102,8 +102,8 @@ impl View {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Next {
-        let mut unhandled = false;
         let mut next = Next::Continue;
+        let mut unhandled = false;
         match key.code {
             KeyCode::Char('M') => self.sort_by = Metric::Mem,
             KeyCode::Char('P') => self.sort_by = Metric::Cpu,
@@ -114,8 +114,8 @@ impl View {
             KeyCode::Char('q') => {
                 // fixes terminal offset weirdness
                 crossterm::terminal::disable_raw_mode().unwrap();
-                // clear old state. hm, this doesn't seem to work anymore.
-                // self.terminal.clear().unwrap();
+                // clear old state
+                self.terminal.clear().unwrap();
                 next = Next::Quit;
             }
             KeyCode::Esc => (), // clear alert
