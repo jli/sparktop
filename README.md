@@ -1,4 +1,4 @@
-# sparktop
+# sparktop ⚡️
 
 top, but like with sparkles ✨
 
@@ -7,21 +7,38 @@ sparktop can!
 
 ![demo](sparktop.png)
 
-## wishlist 📝
+## features
 
 - [x] per-process cpu usage history
   - instead of just showing most recent sample, can show EWMA
   - can draw sparklines ▁▂▁▄▅▄
-- aggregation: group processes together by app name, or parent, by custom regex, etc
-- include wait time? read/writes?
-- interactions:
-  - [x] sort by other values
-  - show other graphs
-  - show/hide columns
-  - process view: show higher-res cpu, disk graphs
-  - filtering
-  - killing
-- feature: figure out more stable ranking for "busy" processes so the list doesn't jump around as much. sorting by memory is pretty good, but also include high-cpu low-mem things.
+
+## todo
+
+- display more stable process list
+  - group stuff by sort key (perhaps deciles?) and then avoid resorting within each decile, since not that important strict ordering as much as rough neighborhood. use boxes or alternating background color
+- keep dead procs for configurable time. render pid w strike through.
+- list: toggle columns
+- list: toggle other sparkline graphs
+- list: toggle full/short process name
+- list: other column options? state, ppid, etc.
+- list: pid tree view
+  - collapsable nodes, which aggregates values
+  - key to fold all below certain depth
+- list: regex folding
+  - add regexs to create aggregation groups, expandable just like tree groups
+  - name display is regex, maybe with representative match name?
+- detailed view: for all selected processes, show higher-granularity sparkline
+- action: kill process
+- process groups
+  - regexs, subtrees, "selection" UI for arbitrary processes
+  - can display all in detailed view, kill all, etc.
+  - some notion of filtering/searching?
+
+cleanups:
+- make tui rendering better:
+  - deal with flashing (double buffer?)
+  - don't wreck terminal after quitting
 
 ## inspo / places to steal from
 
