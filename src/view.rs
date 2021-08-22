@@ -13,6 +13,7 @@ use crate::{render, sproc::SProc};
 
 #[derive(Copy, Clone, PartialEq)]
 enum Metric {
+    Pid, // not really a "metric"... rename this?
     Cpu,
     Mem,
     DiskRead,
@@ -24,6 +25,7 @@ impl Metric {
     fn to_header_str(self, sort_by: Metric) -> String {
         use Metric::*;
         let s = match self {
+            Pid => "pid",
             Cpu => "cpu",
             Mem => "mem",
             DiskRead => "dr",
@@ -82,6 +84,7 @@ impl View {
     fn sort(&self, sprocs: &mut Vec<&SProc>) {
         sprocs.sort_by_key(|&sp| {
             let val = match self.sort_by {
+                Metric::Pid => sp.pid as f64,
                 Metric::Cpu => sp.cpu_ewma,
                 Metric::Mem => sp.mem_mb,
                 Metric::DiskRead => sp.disk_read_ewma,
@@ -99,6 +102,7 @@ impl View {
         let mut next = Next::Continue;
         let mut unhandled = false;
         match key.code {
+            KeyCode::Char('N') => self.sort_by = Metric::Pid,
             KeyCode::Char('M') => self.sort_by = Metric::Mem,
             KeyCode::Char('P') => self.sort_by = Metric::Cpu,
             KeyCode::Char('R') => self.sort_by = Metric::DiskRead,
