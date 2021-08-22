@@ -204,7 +204,7 @@ impl<'a> ProcTable<'a> {
                 Constraint::Length(5),
                 Constraint::Length(5),
                 Constraint::Length(4),
-                Constraint::Min(10),
+                Constraint::Percentage(100),
             ])
     }
 }
