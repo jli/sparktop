@@ -17,7 +17,6 @@ sparktop can!
 
 - display more stable process list
   - group stuff by sort key (perhaps deciles?) and then avoid resorting within each decile, since not that important strict ordering as much as rough neighborhood. use boxes or alternating background color
-- keep dead procs for configurable time. render pid w strike through.
 - list: toggle columns
 - list: toggle other sparkline graphs
 - list: toggle full/short process name

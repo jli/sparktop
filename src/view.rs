@@ -5,6 +5,7 @@ use ordered_float::OrderedFloat as OrdFloat;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tui::layout::{Constraint, Layout};
 use tui::style::{Modifier, Style};
+use tui::text::Span;
 use tui::widgets::{Block, Borders, Paragraph, Row, Table};
 
 use crate::event::Next;
@@ -182,15 +183,19 @@ impl<'a> ProcTable<'a> {
 
     fn get_table(&self) -> impl tui::widgets::Widget + '_ {
         let rows = self.sprocs.iter().map(|sp| {
+            let mut liveness_style = Style::default();
+            if sp.is_dead() {
+                liveness_style = liveness_style.fg(tui::style::Color::Red);
+            }
             Row::new(
                 vec![
-                    sp.pid.to_string(),
-                    sp.name.clone(),
-                    render_metric(sp.disk_read_ewma),
-                    render_metric(sp.disk_write_ewma),
-                    render_metric(sp.mem_mb),
-                    render_metric(sp.cpu_ewma),
-                    render::render_vec(&sp.cpu_hist, 100.),
+                    Span::from(Span::styled(sp.pid.to_string(), liveness_style)),
+                    Span::from(Span::styled(sp.name.clone(), liveness_style)),
+                    Span::from(render_metric(sp.disk_read_ewma)),
+                    Span::from(render_metric(sp.disk_write_ewma)),
+                    Span::from(render_metric(sp.mem_mb)),
+                    Span::from(render_metric(sp.cpu_ewma)),
+                    Span::from(render::render_vec(&sp.cpu_hist, 100.)),
                 ]
                 .into_iter(),
             )

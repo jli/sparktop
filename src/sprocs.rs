@@ -3,7 +3,7 @@ use std::collections::{hash_map::Values, HashMap};
 
 use sysinfo::{ProcessExt, System, SystemExt};
 
-use crate::sproc::SProc;
+use crate::sproc::{DeadStatus, SProc};
 
 pub struct SProcs {
     sys: System,
@@ -34,16 +34,24 @@ impl SProcs {
                 .or_insert(proc.into());
         }
 
-        // clean up dead processes
-        let dead_pids: Vec<i32> = self
+        // TODO: do this more concisely.
+        // get dead procs
+        let mut dead_procs: Vec<(&i32, &mut SProc)> = self
             .sprocs
-            .keys()
-            .filter(|&p| !latest_procs.contains_key(p))
-            .map(|&p| p)
+            .iter_mut()
+            .filter(|(p, _)| !latest_procs.contains_key(p))
             .collect();
-        for dead_pid in dead_pids {
-            log::debug!("removing dead pid: {}", dead_pid);
-            self.sprocs.remove(&dead_pid);
+        // add a pseudo-sample for them and filter for procs that should be removed
+        let procs_to_reap: Vec<i32> = dead_procs
+            .iter_mut()
+            .filter_map(|(&pid, proc)| match proc.add_dead_sample(ewma_weight) {
+                DeadStatus::ShouldReap => Some(pid),
+                DeadStatus::StillFreshlyDead => None,
+            })
+            .collect();
+        for pid in procs_to_reap {
+            log::debug!("removing dead pid: {}", pid);
+            self.sprocs.remove(&pid);
         }
     }
 
