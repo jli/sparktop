@@ -19,12 +19,7 @@ impl STerm {
         STerm { terminal }
     }
 
-    // proxying the only tui::Terminal methods needed. if we need more, maybe just
-    // use terminal directly.
-    pub fn clear(&mut self) -> std::io::Result<()> {
-        self.terminal.clear()
-    }
-
+    // proxying the only tui::Terminal method needed.
     // LEARN: why doesn't this work? (error about sized types, etc)
     // pub fn draw(&mut self, f: FnOnce(&mut tui::Frame<CTBackend>)) -> std::io::Result<()> {
     pub fn draw<F>(&mut self, f: F) -> std::io::Result<()>

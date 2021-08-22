@@ -133,7 +133,6 @@ impl View {
         // erhm, borrow checker workarounds...
         let alert = self.alert.clone();
         let sort_by = self.sort_by.clone();
-        self.sterm.clear()?;
         self.sterm.draw(|f| {
             let main_constraints = if alert.is_some() {
                 vec![Constraint::Min(3), Constraint::Min(1)]
