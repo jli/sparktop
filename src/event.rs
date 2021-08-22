@@ -10,6 +10,13 @@ pub enum Event {
     Key(CTKeyEvent),
 }
 
+// an instruction to the main loop
+#[derive(PartialEq)]
+pub enum Next {
+    Continue,
+    Quit,
+}
+
 pub struct EventStream {
     stream: mpsc::Receiver<Event>,
 }

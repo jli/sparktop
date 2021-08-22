@@ -7,7 +7,7 @@ mod sproc;
 mod sprocs;
 mod view;
 
-use event::{Event, EventStream};
+use event::{Event, EventStream, Next};
 use sprocs::SProcs;
 use view::View;
 
@@ -24,18 +24,19 @@ fn main() -> Result<()> {
     // std::env::set_var("RUST_LOG", "debug");
     std::env::set_var("RUST_LOG", "info");
     pretty_env_logger::init();
-    let opt: Opt = Opt::from_args();
+    let opt = Opt::from_args();
 
     let mut sprocs = SProcs::new();
     let mut view = View::new()?;
     let mut events = EventStream::new(std::time::Duration::from_secs_f64(opt.delay));
     loop {
+        let mut next = Next::Continue;
         match events.next() {
             Event::Resize => {
                 view.draw(&mut sprocs.get().collect())?;
             }
             Event::Key(k) => {
-                view.handle_key(k);
+                next = view.handle_key(k);
                 view.draw(&mut sprocs.get().collect())?;
             }
             Event::Tick => {
@@ -43,6 +44,9 @@ fn main() -> Result<()> {
                 view.draw(&mut sprocs.get().collect())?;
             }
         }
+        if next == Next::Quit {
+            break;
+        }
     }
-    // Note: no Ok because it's unreachable.
+    Ok(())
 }

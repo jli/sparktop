@@ -9,6 +9,7 @@ use tui::style::{Modifier, Style};
 use tui::widgets::{Block, Borders, Paragraph, Row, Table};
 use tui::Terminal;
 
+use crate::event::Next;
 use crate::{render, sproc::SProc};
 
 #[derive(Copy, Clone, PartialEq)]
@@ -100,8 +101,9 @@ impl View {
         });
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) {
+    pub fn handle_key(&mut self, key: KeyEvent) -> Next {
         let mut unhandled = false;
+        let mut next = Next::Continue;
         match key.code {
             KeyCode::Char('M') => self.sort_by = Metric::Mem,
             KeyCode::Char('P') => self.sort_by = Metric::Cpu,
@@ -109,8 +111,13 @@ impl View {
             KeyCode::Char('W') => self.sort_by = Metric::DiskWrite,
             KeyCode::Char('D') => self.sort_by = Metric::DiskTotal,
             KeyCode::Char('I') => self.sort_dir.flip(),
-            // TODO: nicer exit method...
-            KeyCode::Char('q') => panic!("quitting"),
+            KeyCode::Char('q') => {
+                // fixes terminal offset weirdness
+                crossterm::terminal::disable_raw_mode().unwrap();
+                // clear old state. hm, this doesn't seem to work anymore.
+                // self.terminal.clear().unwrap();
+                next = Next::Quit;
+            }
             KeyCode::Esc => (), // clear alert
             KeyCode::Char('l') => {
                 // if l but no ctrl, consider unhandled.
@@ -126,6 +133,8 @@ impl View {
         } else {
             self.alert = None;
         }
+
+        next
     }
 
     pub fn draw(&mut self, sprocs: &mut Vec<&SProc>) -> Result<()> {
