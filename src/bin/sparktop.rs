@@ -23,11 +23,13 @@ fn main() -> Result<()> {
     pretty_env_logger::init();
     let opt = Opt::from_args();
 
-    let mut sprocs = SProcs::new();
-    let mut view = View::new()?;
-    let mut events = EventStream::new(std::time::Duration::from_secs_f64(opt.delay));
-    loop {
-        let next = match events.next() {
+    let mut sprocs = SProcs::default();
+    let mut view = View::default();
+    let events = EventStream::new(std::time::Duration::from_secs_f64(opt.delay));
+    // hmm, maybe can restructure so that quitting gets injected as an event,
+    // which halts the EventStream iterator?
+    for event in events {
+        let next = match event {
             Event::Resize => Next::Continue,
             Event::Key(k) => view.handle_key(k),
             Event::Tick => {

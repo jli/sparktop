@@ -10,15 +10,17 @@ pub struct STerm {
     terminal: Terminal<CTBackend>,
 }
 
-impl STerm {
-    pub fn new() -> Self {
+impl Default for STerm {
+    fn default() -> Self {
         let stdout = std::io::stdout();
         let backend = CrosstermBackend::new(stdout);
         let terminal = tui::Terminal::new(backend).expect("couldn't make tui::Terminal");
         init_terminal();
         STerm { terminal }
     }
+}
 
+impl STerm {
     // proxying the only tui::Terminal method needed.
     // LEARN: why doesn't this work? (error about sized types, etc)
     // pub fn draw(&mut self, f: FnOnce(&mut tui::Frame<CTBackend>)) -> std::io::Result<()> {

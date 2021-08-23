@@ -32,13 +32,13 @@ impl EventStream {
             thread::sleep(tick_every);
         });
 
-        let term_tx = tx.clone();
+        let event_tx = tx;
         thread::spawn(move || {
             // TODO: limit Resize frequency.
             loop {
                 match crossterm::event::read().expect("read term event") {
-                    CTEvent::Key(ke) => term_tx.send(Event::Key(ke)),
-                    CTEvent::Resize(_, _) => term_tx.send(Event::Resize),
+                    CTEvent::Key(ke) => event_tx.send(Event::Key(ke)),
+                    CTEvent::Resize(_, _) => event_tx.send(Event::Resize),
                     CTEvent::Mouse(_) => Ok(()),
                 }
                 .expect("send term event")
@@ -47,8 +47,11 @@ impl EventStream {
 
         Self { stream: rx }
     }
+}
 
-    pub fn next(&mut self) -> Event {
-        self.stream.recv().expect("get next event")
+impl Iterator for EventStream {
+    type Item = Event;
+    fn next(&mut self) -> Option<Event> {
+        Some(self.stream.recv().expect("get next event"))
     }
 }

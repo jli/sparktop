@@ -14,5 +14,4 @@ repos:
   hooks:
   - id: fmt
   - id: cargo-check
-  # oops, bunch of issues...
-  # - id: clippy
+  - id: clippy

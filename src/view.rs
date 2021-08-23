@@ -63,6 +63,17 @@ pub struct View {
     alert: Option<String>,
 }
 
+impl Default for View {
+    fn default() -> Self {
+        Self {
+            sterm: STerm::default(),
+            sort_by: Metric::Cpu,
+            sort_dir: Dir::Desc,
+            alert: None,
+        }
+    }
+}
+
 // hide low values
 fn render_metric(m: f64) -> String {
     if m < 0.05 {
@@ -73,15 +84,6 @@ fn render_metric(m: f64) -> String {
 }
 
 impl View {
-    pub fn new() -> Result<Self> {
-        Ok(Self {
-            sterm: STerm::new(),
-            sort_by: Metric::Cpu,
-            sort_dir: Dir::Desc,
-            alert: None,
-        })
-    }
-
     fn sort(&self, sprocs: &mut Vec<&SProc>) {
         sprocs.sort_by_key(|&sp| {
             let val = match self.sort_by {
@@ -137,7 +139,7 @@ impl View {
         self.sort(sprocs);
         // erhm, borrow checker workarounds...
         let alert = self.alert.clone();
-        let sort_by = self.sort_by.clone();
+        let sort_by = self.sort_by;
         self.sterm.draw(|f| {
             let main_constraints = if alert.is_some() {
                 vec![Constraint::Min(3), Constraint::Min(1)]
@@ -165,11 +167,11 @@ impl View {
 
 struct ProcTable<'a> {
     header: Vec<String>,
-    sprocs: &'a Vec<&'a SProc>,
+    sprocs: &'a [&'a SProc],
 }
 
 impl<'a> ProcTable<'a> {
-    fn new(sprocs: &'a Vec<&SProc>, sort_by: Metric) -> Self {
+    fn new(sprocs: &'a [&SProc], sort_by: Metric) -> Self {
         use Metric::*;
         let mut header = vec![String::from("pid"), String::from("process")];
         header.extend(
@@ -189,8 +191,8 @@ impl<'a> ProcTable<'a> {
             }
             Row::new(
                 vec![
-                    Span::from(Span::styled(sp.pid.to_string(), liveness_style)),
-                    Span::from(Span::styled(sp.name.clone(), liveness_style)),
+                    Span::styled(sp.pid.to_string(), liveness_style),
+                    Span::styled(sp.name.clone(), liveness_style),
                     Span::from(render_metric(sp.disk_read_ewma)),
                     Span::from(render_metric(sp.disk_write_ewma)),
                     Span::from(render_metric(sp.mem_mb)),

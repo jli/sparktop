@@ -171,8 +171,8 @@ fn draw_help<B: Backend>(f: &mut Frame<B>, area: Rect, activity: &ActivityMode) 
     f.render_widget(para, area);
 }
 
-fn draw_error<B: Backend>(f: &mut Frame<B>, area: Rect, err: &String) {
-    let msg = Paragraph::new(&err[..]);
+fn draw_error<B: Backend>(f: &mut Frame<B>, area: Rect, err: &str) {
+    let msg = Paragraph::new(err);
     f.render_widget(msg, area);
 }
 
@@ -194,7 +194,7 @@ fn draw<B: Backend>(f: &mut Frame<B>, draw_input: &DrawState) {
         .split(full);
     let (main_area, help_area) = (chunks[0], chunks[chunks.len() - 1]);
 
-    draw_main(f, main_area, &draw_input);
+    draw_main(f, main_area, draw_input);
     draw_help(f, help_area, &draw_input.activity);
     if has_error {
         draw_error(f, chunks[1], draw_input.error.as_ref().unwrap());
@@ -202,7 +202,7 @@ fn draw<B: Backend>(f: &mut Frame<B>, draw_input: &DrawState) {
 }
 
 fn main() -> Result<(), std::io::Error> {
-    let mut sterm = sterm::STerm::new();
+    let mut sterm = sterm::STerm::default();
     let mut draw_state = DrawState {
         title: String::from("initial title"),
         activity: ActivityMode::Top,

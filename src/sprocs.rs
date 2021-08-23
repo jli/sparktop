@@ -10,14 +10,16 @@ pub struct SProcs {
     sprocs: HashMap<i32, SProc>,
 }
 
-impl SProcs {
-    pub fn new() -> Self {
+impl Default for SProcs {
+    fn default() -> Self {
         Self {
             sys: System::new_all(),
             sprocs: HashMap::default(),
         }
     }
+}
 
+impl SProcs {
     pub fn update(&mut self, ewma_weight: f64) {
         // Not completely sure why, but we need to refresh cpu immediately
         // before processes for refresh_processes to include cpu usage. This
@@ -31,7 +33,7 @@ impl SProcs {
             self.sprocs
                 .entry(pid)
                 .and_modify(|sp| sp.add_sample(proc, ewma_weight))
-                .or_insert(proc.into());
+                .or_insert_with(|| proc.into());
         }
 
         // TODO: do this more concisely.
