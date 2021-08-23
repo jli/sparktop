@@ -28,8 +28,8 @@ impl EventStream {
 
         let tick_tx = tx.clone();
         thread::spawn(move || loop {
-            thread::sleep(tick_every);
             tick_tx.send(Event::Tick).expect("failed to tick");
+            thread::sleep(tick_every);
         });
 
         let term_tx = tx.clone();
