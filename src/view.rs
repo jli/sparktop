@@ -2,7 +2,7 @@
 use anyhow::Result;
 use ordered_float::OrderedFloat as OrdFloat;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use tui::{
     layout::{Constraint, Layout},
     style::{Modifier, Style},
@@ -19,7 +19,7 @@ use crate::{
 
 #[derive(Default)]
 pub struct View {
-    sterm: STerm,
+    terminal: STerm,
     state: ViewState,
 }
 
@@ -52,17 +52,8 @@ impl View {
             KeyCode::Char('W') => self.state.sort_by = Metric::DiskWrite,
             KeyCode::Char('D') => self.state.sort_by = Metric::DiskTotal,
             KeyCode::Char('I') => self.state.sort_dir.flip(),
-            KeyCode::Char('q') => {
-                // note: terminal cleanup happens automatically via STerm::drop
-                next = Next::Quit;
-            }
+            KeyCode::Char('q') => next = Next::Quit,
             KeyCode::Esc => (), // clear alert
-            KeyCode::Char('l') => {
-                // if l but no ctrl, consider unhandled.
-                if !key.modifiers.contains(KeyModifiers::CONTROL) {
-                    unhandled = true;
-                } // else (ctrl-l) clear alert
-            }
             _ => unhandled = true,
         }
 
@@ -80,7 +71,7 @@ impl View {
         // erhm, borrow checker workarounds...
         let alert = self.state.alert.clone();
         let sort_by = self.state.sort_by;
-        self.sterm.draw(|f| {
+        self.terminal.draw(|f| {
             let main_constraints = if alert.is_some() {
                 vec![Constraint::Min(3), Constraint::Min(1)]
             } else {
