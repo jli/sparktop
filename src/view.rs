@@ -73,23 +73,23 @@ impl View {
         let sort_by = self.state.sort_by;
         self.terminal.draw(|f| {
             let main_constraints = if alert.is_some() {
-                vec![Constraint::Min(3), Constraint::Min(1)]
+                vec![Constraint::Min(1), Constraint::Min(3)]
             } else {
-                vec![Constraint::Min(1)]
+                vec![Constraint::Percentage(100)]
             };
-            let mut rects = Layout::default()
+            let rects = Layout::default()
                 .constraints(main_constraints)
                 .split(f.size());
 
             // Draw main panel.
-            let main = rects.pop().unwrap(); // main panel last rect
+            let main = rects[0];
             let proc_table = ProcTable::new(sprocs, sort_by);
             f.render_widget(proc_table.get_table(), main);
 
             // Draw alert.
             if let Some(alert) = alert {
                 let msg = Paragraph::new(alert).block(Block::default().borders(Borders::ALL));
-                f.render_widget(msg, rects[0])
+                f.render_widget(msg, rects[1])
             }
         })?;
         Ok(())
