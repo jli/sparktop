@@ -1,17 +1,11 @@
 use anyhow::Result;
 use structopt::StructOpt;
 
-// LEARN: why do i need to mention these here?
-mod event;
-mod render;
-mod sproc;
-mod sprocs;
-mod sterm;
-mod view;
-
-use event::{Event, EventStream, Next};
-use sprocs::SProcs;
-use view::View;
+use sparktop::{
+    event::{Event, EventStream, Next},
+    sprocs::SProcs,
+    view::View,
+};
 
 #[derive(StructOpt)]
 struct Opt {
@@ -23,8 +17,9 @@ struct Opt {
 }
 
 fn main() -> Result<()> {
-    // std::env::set_var("RUST_LOG", "debug");
+    // TODO: do something with logs so they appear in special debug pane?
     std::env::set_var("RUST_LOG", "info");
+    // std::env::set_var("RUST_LOG", "debug");
     pretty_env_logger::init();
     let opt = Opt::from_args();
 

@@ -1,7 +1,6 @@
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+pub mod event;
+pub mod render;
+pub mod sproc;
+pub mod sprocs;
+pub mod sterm;
+pub mod view;
