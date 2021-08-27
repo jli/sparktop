@@ -38,3 +38,4 @@ sparktop can!
 
 - [bottom](https://github.com/ClementTsang/bottom/blob/309ebd8dc3ba35f80c93a296ebc688813e988d03/src/lib.rs#L348)
 - [zenith](https://github.com/bvaisvil/zenith/blob/master/src/metrics.rs#L387)
+- https://www.wezm.net/v2/posts/2020/rust-top-alternatives/
