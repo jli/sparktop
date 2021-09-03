@@ -29,14 +29,7 @@ pub struct View {
 impl View {
     fn sort(&self, sprocs: &mut Vec<&SProc>) {
         sprocs.sort_by_key(|&sp| {
-            let val = match self.state.sort_by {
-                SortColumn::Pid => sp.pid as f64,
-                SortColumn::Cpu => sp.cpu_ewma,
-                SortColumn::Mem => sp.mem_mb,
-                SortColumn::DiskRead => sp.disk_read_ewma,
-                SortColumn::DiskWrite => sp.disk_write_ewma,
-                SortColumn::DiskTotal => sp.disk_read_ewma + sp.disk_write_ewma,
-            };
+            let val = self.state.sort_by.from_sproc(sp);
             match self.state.sort_dir {
                 Dir::Asc => OrdFloat(val),
                 Dir::Desc => OrdFloat(-val),

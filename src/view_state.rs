@@ -3,6 +3,8 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use tui::layout::Constraint;
 
+use crate::sproc::SProc;
+
 #[derive(Default)]
 pub struct ViewState {
     pub sort_by: SortColumn,
@@ -311,6 +313,19 @@ impl PartialEq<DisplayColumn> for SortColumn {
                 | (S::DiskWrite, D::DiskWrite)
                 | (S::DiskTotal, D::DiskWrite | D::DiskRead)
         )
+    }
+}
+
+impl SortColumn {
+    pub fn from_sproc(self, sp: &SProc) -> f64 {
+        match self {
+            SortColumn::Pid => sp.pid as f64,
+            SortColumn::Cpu => sp.cpu_ewma,
+            SortColumn::Mem => sp.mem_mb,
+            SortColumn::DiskRead => sp.disk_read_ewma,
+            SortColumn::DiskWrite => sp.disk_write_ewma,
+            SortColumn::DiskTotal => sp.disk_read_ewma + sp.disk_write_ewma,
+        }
     }
 }
 
