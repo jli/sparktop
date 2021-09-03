@@ -3,36 +3,23 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use tui::layout::Constraint;
 
-use crate::{render, sproc::SProc};
-
+#[derive(Default)]
 pub struct ViewState {
     pub sort_by: SortColumn,
     pub sort_dir: Dir,
     pub displayed_columns: DisplayedColumns,
+    pub selected: Option<i32>,
+    pub zoom_selected: bool,
     pub alert: Option<String>,
     pub should_quit: bool,
     action: Action,
 }
 
-impl Default for ViewState {
-    fn default() -> Self {
-        Self {
-            sort_by: SortColumn::Cpu,
-            sort_dir: Dir::Desc,
-            displayed_columns: DisplayedColumns::default(),
-            alert: None,
-            should_quit: false,
-            action: Action::Top,
-        }
-    }
-}
-
 impl ViewState {
     pub fn handle_key(&mut self, key_event: KeyEvent) {
-        let code = key_event.code;
         use Action::*;
         let mut unhandled = false;
-        match (&self.action, code) {
+        match (&self.action, key_event.code) {
             (_, KeyCode::Esc) => self.action = Top,
             (&Top, KeyCode::Char('q')) => self.should_quit = true,
             (&Top, KeyCode::Char(c)) => match Action::action_from_char(c) {
@@ -48,7 +35,7 @@ impl ViewState {
             },
             (&ToggleColumn, KeyCode::Char(c)) => match Action::display_col_from_char(c) {
                 Some(col) => {
-                    self.displayed_columns.toggle(col);
+                    self.displayed_columns.toggle(&col);
                     self.action = Top;
                 }
                 None => unhandled = true,
@@ -79,6 +66,12 @@ pub enum Action {
     ToggleColumn,
 }
 
+impl Default for Action {
+    fn default() -> Self {
+        Action::Top
+    }
+}
+
 impl Action {
     fn action_from_char(input_c: char) -> Option<Action> {
         VIEW_ACTIONS
@@ -90,8 +83,7 @@ impl Action {
         // note: can use iterator::intersperse when it's stable
         let parts: Vec<&str> = VIEW_ACTIONS
             .iter()
-            .map(|ViewAction(_, _, help)| help)
-            .copied()
+            .map(|&ViewAction(_, _, help)| help)
             .collect();
         parts.join("  ")
     }
@@ -105,8 +97,7 @@ impl Action {
     fn sort_col_help() -> String {
         let parts: Vec<&str> = VIEW_SORT_COLUMNS
             .iter()
-            .map(|ViewSortColumn(_, _, help)| help)
-            .copied()
+            .map(|&ViewSortColumn(_, _, help)| help)
             .collect();
         parts.join("  ")
     }
@@ -234,7 +225,7 @@ impl Default for DisplayedColumns {
 }
 
 impl DisplayedColumns {
-    fn toggle(&mut self, col: DisplayColumn) {
+    fn toggle(&mut self, col: &DisplayColumn) {
         use DisplayColumn::*;
         match col {
             Pid => self.pid = !self.pid,
@@ -280,32 +271,10 @@ impl DisplayedColumns {
             })
             .collect()
     }
-
-    // TODO: gurgh, why can't i just do this in view.rs? oh, maybe because i forgot .iter()..
-    pub fn row_data(&self, sp: &SProc) -> Vec<String> {
-        use DisplayColumn::*;
-        VIEW_DISPLAY_COLUMNS
-            .iter()
-            .filter_map(|ViewDisplayColumn(dc, _, _, _, _)| {
-                if !self.should_show(dc) {
-                    return None;
-                }
-                Some(match dc {
-                    Pid => sp.pid.to_string(),
-                    ProcessName => sp.name.clone(),
-                    DiskRead => render_metric(sp.disk_read_ewma),
-                    DiskWrite => render_metric(sp.disk_write_ewma),
-                    Mem => render_metric(sp.mem_mb),
-                    Cpu => render_metric(sp.cpu_ewma),
-                    CpuHistory => render::render_vec(&sp.cpu_hist, 100.),
-                })
-            })
-            .collect()
-    }
 }
 
 // hide low values
-fn render_metric(m: f64) -> String {
+pub fn render_metric(m: f64) -> String {
     if m < 0.05 {
         String::from("_")
     } else {
@@ -323,6 +292,12 @@ pub enum SortColumn {
     DiskTotal,
 }
 
+impl Default for SortColumn {
+    fn default() -> Self {
+        SortColumn::Cpu
+    }
+}
+
 impl PartialEq<DisplayColumn> for SortColumn {
     fn eq(&self, other: &DisplayColumn) -> bool {
         use DisplayColumn as D;
@@ -336,15 +311,6 @@ impl PartialEq<DisplayColumn> for SortColumn {
                 | (S::DiskWrite, D::DiskWrite)
                 | (S::DiskTotal, D::DiskWrite | D::DiskRead)
         )
-        // match (self, other) {
-        //     (S::Pid, D::Pid)
-        //     | (S::Cpu, D::Cpu)
-        //     | (S::Mem, D::Mem)
-        //     | (S::DiskRead, D::DiskRead)
-        //     | (S::DiskWrite, D::DiskWrite)
-        //     | (S::DiskTotal, D::DiskWrite | D::DiskRead) => true,
-        //     _ => false,
-        // }
     }
 }
 
@@ -362,6 +328,12 @@ const VIEW_SORT_COLUMNS: [ViewSortColumn; 6] = [
 pub enum Dir {
     Asc,
     Desc,
+}
+
+impl Default for Dir {
+    fn default() -> Self {
+        Dir::Desc
+    }
 }
 
 impl Dir {
