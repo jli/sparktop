@@ -110,6 +110,18 @@ impl View {
 // TODO: make this a Widget
 struct ProcTable();
 
+fn cpu_color(cpu: f64) -> Option<Color> {
+    if cpu >= 400.0 {
+        Some(Color::Magenta)
+    } else if cpu >= 200.0 {
+        Some(Color::LightMagenta)
+    } else if cpu >= 100.0 {
+        Some(Color::Red)
+    } else {
+        None
+    }
+}
+
 impl ProcTable {
     fn build<'a>(
         sprocs: &'a [&SProc],
@@ -133,7 +145,14 @@ impl ProcTable {
                     DiskRead => Span::from(render_metric(sp.disk_read_ewma)),
                     DiskWrite => Span::from(render_metric(sp.disk_write_ewma)),
                     Mem => Span::from(render_metric(sp.mem_mb)),
-                    Cpu => Span::from(render_metric(sp.cpu_ewma)),
+                    Cpu => {
+                        let text = render_metric(sp.cpu_ewma);
+                        if let Some(color) = cpu_color(sp.cpu_ewma) {
+                            Span::styled(text, Style::default().fg(color))
+                        } else {
+                            Span::from(text)
+                        }
+                    }
                     CpuHistory => Span::from(render::render_vec(&sp.cpu_hist, 100.)),
                 });
             Row::new(values)

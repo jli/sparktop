@@ -61,17 +61,12 @@ impl ViewState {
     }
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Default)]
 pub enum Action {
+    #[default]
     Top,
     SelectSort,
     ToggleColumn,
-}
-
-impl Default for Action {
-    fn default() -> Self {
-        Action::Top
-    }
 }
 
 impl Action {
@@ -284,20 +279,15 @@ pub fn render_metric(m: f64) -> String {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Default)]
 pub enum SortColumn {
     Pid,
+    #[default]
     Cpu,
     Mem,
     DiskRead,
     DiskWrite,
     DiskTotal,
-}
-
-impl Default for SortColumn {
-    fn default() -> Self {
-        SortColumn::Cpu
-    }
 }
 
 impl PartialEq<DisplayColumn> for SortColumn {
@@ -340,15 +330,11 @@ const VIEW_SORT_COLUMNS: [ViewSortColumn; 6] = [
     ViewSortColumn(SortColumn::Cpu, 'c', "(c)pu"),
 ];
 
+#[derive(Default)]
 pub enum Dir {
     Asc,
+    #[default]
     Desc,
-}
-
-impl Default for Dir {
-    fn default() -> Self {
-        Dir::Desc
-    }
 }
 
 impl Dir {
