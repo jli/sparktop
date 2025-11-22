@@ -1,13 +1,13 @@
 /// SProcs: a collection of all processes on the system.
 use std::collections::{hash_map::Values, HashMap};
 
-use sysinfo::{ProcessExt, System, SystemExt};
+use sysinfo::{Pid, System};
 
 use crate::sproc::{DeadStatus, SProc};
 
 pub struct SProcs {
     sys: System,
-    sprocs: HashMap<i32, SProc>,
+    sprocs: HashMap<Pid, SProc>,
 }
 
 impl Default for SProcs {
@@ -38,13 +38,13 @@ impl SProcs {
 
         // TODO: do this more concisely.
         // get dead procs
-        let mut dead_procs: Vec<(&i32, &mut SProc)> = self
+        let mut dead_procs: Vec<(&Pid, &mut SProc)> = self
             .sprocs
             .iter_mut()
             .filter(|(p, _)| !latest_procs.contains_key(p))
             .collect();
         // add a pseudo-sample for them and filter for procs that should be removed
-        let procs_to_reap: Vec<i32> = dead_procs
+        let procs_to_reap: Vec<Pid> = dead_procs
             .iter_mut()
             .filter_map(|(&pid, proc)| match proc.add_dead_sample(ewma_weight) {
                 DeadStatus::ShouldReap => Some(pid),
@@ -57,7 +57,7 @@ impl SProcs {
         }
     }
 
-    pub fn get(&self) -> Values<i32, SProc> {
+    pub fn get(&self) -> Values<Pid, SProc> {
         self.sprocs.values()
     }
 }

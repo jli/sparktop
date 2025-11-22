@@ -1,4 +1,9 @@
 /// Rendering logic.
+use tui::{
+    style::{Color, Style},
+    text::Span,
+};
+
 pub fn render_vec<'a, II>(xs: II, max: f64) -> String
 where
     II: IntoIterator<Item = &'a f64>,
@@ -9,6 +14,36 @@ where
         r.push(float_bar(p));
     }
     r
+}
+
+pub fn render_vec_colored<'a, II>(xs: II, max: f64) -> Vec<Span<'a>>
+where
+    II: IntoIterator<Item = &'a f64>,
+{
+    let mut result = Vec::new();
+    for x in xs.into_iter() {
+        let p = *x / max;
+        let c = float_bar(p);
+        let color = cpu_color(*x);
+        if let Some(color) = color {
+            result.push(Span::styled(c.to_string(), Style::default().fg(color)));
+        } else {
+            result.push(Span::raw(c.to_string()));
+        }
+    }
+    result
+}
+
+fn cpu_color(cpu: f64) -> Option<Color> {
+    if cpu >= 400.0 {
+        Some(Color::Magenta)
+    } else if cpu >= 200.0 {
+        Some(Color::LightMagenta)
+    } else if cpu >= 100.0 {
+        Some(Color::Red)
+    } else {
+        None
+    }
 }
 
 const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];

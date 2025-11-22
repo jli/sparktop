@@ -1,13 +1,13 @@
 /// SProc: a single process.
 use std::collections::VecDeque;
-use sysinfo::{Process, ProcessExt};
+use sysinfo::{Pid, Process};
 
 const SAMPLE_LIMIT: usize = 60;
 
 #[derive(Debug)]
 pub struct SProc {
     // TODO: ppid, cmd, memory?
-    pub pid: i32,
+    pub pid: Pid,
     pub name: String,
     pub cpu_ewma: f64,
     pub cpu_hist: VecDeque<f64>,

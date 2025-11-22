@@ -5,7 +5,7 @@ use ordered_float::OrderedFloat as OrdFloat;
 use tui::{
     layout::{Alignment, Constraint, Layout},
     style::{Color, Modifier, Style},
-    text::Span,
+    text::{Span, Spans},
     widgets::{Block, Borders, Paragraph, Row, Table},
 };
 
@@ -140,20 +140,20 @@ impl ProcTable {
             let values = vdcols
                 .iter()
                 .map(|ViewDisplayColumn(c, _, _, _, _)| match c {
-                    Pid => Span::styled(sp.pid.to_string(), liveness_style),
-                    ProcessName => Span::styled(sp.name.clone(), liveness_style),
-                    DiskRead => Span::from(render_metric(sp.disk_read_ewma)),
-                    DiskWrite => Span::from(render_metric(sp.disk_write_ewma)),
-                    Mem => Span::from(render_metric(sp.mem_mb)),
+                    Pid => Spans::from(Span::styled(sp.pid.to_string(), liveness_style)),
+                    ProcessName => Spans::from(Span::styled(sp.name.clone(), liveness_style)),
+                    DiskRead => Spans::from(Span::from(render_metric(sp.disk_read_ewma))),
+                    DiskWrite => Spans::from(Span::from(render_metric(sp.disk_write_ewma))),
+                    Mem => Spans::from(Span::from(render_metric(sp.mem_mb))),
                     Cpu => {
                         let text = render_metric(sp.cpu_ewma);
                         if let Some(color) = cpu_color(sp.cpu_ewma) {
-                            Span::styled(text, Style::default().fg(color))
+                            Spans::from(Span::styled(text, Style::default().fg(color)))
                         } else {
-                            Span::from(text)
+                            Spans::from(Span::from(text))
                         }
                     }
-                    CpuHistory => Span::from(render::render_vec(&sp.cpu_hist, 100.)),
+                    CpuHistory => Spans::from(render::render_vec_colored(&sp.cpu_hist, 100.)),
                 });
             Row::new(values)
         });

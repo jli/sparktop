@@ -309,7 +309,7 @@ impl PartialEq<DisplayColumn> for SortColumn {
 impl SortColumn {
     pub fn from_sproc(self, sp: &SProc) -> f64 {
         match self {
-            SortColumn::Pid => sp.pid as f64,
+            SortColumn::Pid => sp.pid.as_u32() as f64,
             SortColumn::Cpu => sp.cpu_ewma,
             SortColumn::Mem => sp.mem_mb,
             SortColumn::DiskRead => sp.disk_read_ewma,
