@@ -34,7 +34,7 @@ where
     result
 }
 
-fn cpu_color(cpu: f64) -> Option<Color> {
+pub fn cpu_color(cpu: f64) -> Option<Color> {
     if cpu >= 400.0 {
         Some(Color::Magenta)
     } else if cpu >= 200.0 {
