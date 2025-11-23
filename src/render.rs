@@ -252,67 +252,130 @@ pub fn compress_history(hist: &VecDeque<f64>, width: usize) -> (Vec<f64>, Compre
         scheme_t2_samples = allocation.5;
     } else {
         // Constrained space: need to compress tier0 too
+        // KEY RULE: At least 1/3 of width should be full resolution (1:1)
+        // BUT only when width is large enough (>= 9) to make this meaningful
+        let min_full_res = if width >= 9 {
+            (width / 3).max(1).min(tier0_samples)
+        } else {
+            0
+        };
+
         let allocation = if tier1_samples == 0 && tier2_samples == 0 && tier0_samples > width {
             // Virtual tiering within tier0
-            let recent_samples = (tier0_samples / 3).max(1);
-            let older_samples = tier0_samples - recent_samples;
-            let recent_bars = (width * 2 / 3).max(1).min(recent_samples); // Never expand
-            let older_bars = width - recent_bars;
-            (recent_bars, older_bars, 0, recent_samples, older_samples, 0)
+            if min_full_res > 0 {
+                // Reserve min_full_res bars at 1:1 for most recent samples
+                let full_res_bars = min_full_res;
+                let compressed_bars = width - full_res_bars;
+                let compressed_samples = tier0_samples - full_res_bars;
+                (
+                    full_res_bars,
+                    compressed_bars,
+                    0,
+                    full_res_bars,
+                    compressed_samples,
+                    0,
+                )
+            } else {
+                // Very narrow: compress all uniformly with 2/3 recent, 1/3 older
+                let recent_samples = (tier0_samples / 3).max(1);
+                let older_samples = tier0_samples - recent_samples;
+                let recent_bars = (width * 2 / 3).max(1).min(recent_samples);
+                let older_bars = width - recent_bars;
+                (recent_bars, older_bars, 0, recent_samples, older_samples, 0)
+            }
         } else {
-            // Normal constrained allocation
-            let num_tiers = (if tier0_samples > 0 { 1 } else { 0 })
-                + (if tier1_samples > 0 { 1 } else { 0 })
-                + (if tier2_samples > 0 { 1 } else { 0 });
+            // Multiple tiers exist
+            if min_full_res > 0 {
+                // Guarantee min_full_res bars at 1:1 from tier0
+                let tier0_full_res = min_full_res;
+                let remaining_width = width.saturating_sub(tier0_full_res);
 
-            match width.cmp(&num_tiers) {
-                std::cmp::Ordering::Less => {
-                    // Very narrow: 1 bar per tier or less
-                    let t0 = if tier0_samples > 0 { 1 } else { 0 };
-                    let t1 = if tier1_samples > 0 && width > t0 {
-                        1
-                    } else {
-                        0
-                    };
-                    let t2 = if tier2_samples > 0 {
-                        width.saturating_sub(t0 + t1)
-                    } else {
-                        0
-                    };
-                    (t0, t1, t2, tier0_samples, tier1_samples, tier2_samples)
-                }
-                std::cmp::Ordering::Equal => {
-                    // Exactly 1 bar per tier
+                if remaining_width == 0 {
+                    // Only room for full-res tier0
+                    (tier0_full_res, 0, 0, tier0_full_res, 0, 0)
+                } else if tier1_samples > 0 && tier2_samples > 0 {
+                    // Both tier1 and tier2: split remaining between them
+                    let t1_bars = (remaining_width * 2 / 3).max(1);
+                    let t2_bars = remaining_width.saturating_sub(t1_bars);
                     (
-                        if tier0_samples > 0 { 1 } else { 0 },
-                        if tier1_samples > 0 { 1 } else { 0 },
-                        if tier2_samples > 0 { 1 } else { 0 },
-                        tier0_samples,
+                        tier0_full_res,
+                        t1_bars,
+                        t2_bars,
+                        tier0_full_res,
                         tier1_samples,
                         tier2_samples,
                     )
+                } else if tier1_samples > 0 {
+                    // Only tier1: give it all remaining
+                    (
+                        tier0_full_res,
+                        remaining_width,
+                        0,
+                        tier0_full_res,
+                        tier1_samples,
+                        0,
+                    )
+                } else {
+                    // Only tier2: give it all remaining
+                    (
+                        tier0_full_res,
+                        0,
+                        remaining_width,
+                        tier0_full_res,
+                        0,
+                        tier2_samples,
+                    )
                 }
-                std::cmp::Ordering::Greater => {
-                    // Allocate proportionally: tier0 gets 2/3, tier1/2 split remaining
-                    let t0 = if tier0_samples > 0 {
-                        (width * 2 / 3).max(1)
-                    } else {
-                        0
-                    };
-                    let remaining = width.saturating_sub(t0);
+            } else {
+                // Very narrow: proportional allocation
+                let num_tiers = (if tier0_samples > 0 { 1 } else { 0 })
+                    + (if tier1_samples > 0 { 1 } else { 0 })
+                    + (if tier2_samples > 0 { 1 } else { 0 });
 
-                    if tier2_samples > 0 && remaining > 0 {
-                        let t1 = if tier1_samples > 0 {
-                            (remaining * 2 / 3).max(if remaining > 1 { 1 } else { 0 })
+                match width.cmp(&num_tiers) {
+                    std::cmp::Ordering::Equal => {
+                        // Exactly 1 bar per tier
+                        (
+                            if tier0_samples > 0 { 1 } else { 0 },
+                            if tier1_samples > 0 { 1 } else { 0 },
+                            if tier2_samples > 0 { 1 } else { 0 },
+                            tier0_samples,
+                            tier1_samples,
+                            tier2_samples,
+                        )
+                    }
+                    std::cmp::Ordering::Greater => {
+                        // More than 1 bar per tier: allocate proportionally
+                        let t0 = (width * 2 / 3).max(1);
+                        let remaining = width.saturating_sub(t0);
+                        if tier2_samples > 0 && remaining > 0 {
+                            let t1 = if tier1_samples > 0 {
+                                (remaining * 2 / 3).max(1)
+                            } else {
+                                0
+                            };
+                            let t2 = remaining.saturating_sub(t1);
+                            (t0, t1, t2, tier0_samples, tier1_samples, tier2_samples)
+                        } else if tier1_samples > 0 {
+                            (t0, remaining, 0, tier0_samples, tier1_samples, 0)
+                        } else {
+                            (t0, 0, 0, tier0_samples, 0, 0)
+                        }
+                    }
+                    std::cmp::Ordering::Less => {
+                        // Less than 1 bar per tier
+                        let t0 = if tier0_samples > 0 { 1 } else { 0 };
+                        let t1 = if tier1_samples > 0 && width > t0 {
+                            1
                         } else {
                             0
                         };
-                        let t2 = remaining.saturating_sub(t1);
+                        let t2 = if tier2_samples > 0 {
+                            width.saturating_sub(t0 + t1)
+                        } else {
+                            0
+                        };
                         (t0, t1, t2, tier0_samples, tier1_samples, tier2_samples)
-                    } else if tier1_samples > 0 {
-                        (t0, remaining, 0, tier0_samples, tier1_samples, 0)
-                    } else {
-                        (t0, 0, 0, tier0_samples, 0, 0)
                     }
                 }
             }
@@ -552,9 +615,19 @@ mod tests {
         let hist = make_history(600);
         let (compressed, scheme) = compress_history(&hist, 50);
 
-        // Recent data should get priority
-        assert!(scheme.tier0_bars > scheme.tier1_bars);
-        assert!(scheme.tier1_bars > scheme.tier2_bars);
+        // With new 1/3 full-res rule: at least 16 bars (50/3) should be full resolution
+        let full_res_bars = if scheme.tier0_bars == scheme.tier0_samples {
+            scheme.tier0_bars
+        } else {
+            0
+        };
+        assert!(
+            full_res_bars >= 16,
+            "Expected at least 16 full-res bars, got {}",
+            full_res_bars
+        );
+
+        // All width should be used
         assert_eq!(
             scheme.tier0_bars + scheme.tier1_bars + scheme.tier2_bars,
             50
@@ -617,6 +690,85 @@ mod tests {
             scheme.tier0_bars + scheme.tier1_bars + scheme.tier2_bars
         );
         assert_eq!(markers.len(), 30);
+    }
+
+    #[test]
+    fn test_never_stretch_samples() {
+        // CRITICAL: bars should NEVER exceed samples (would show red "!" error)
+        // This test ensures allocation never creates stretching bugs
+        let hist = make_history(600);
+
+        for width in 1..200 {
+            let (_, scheme) = compress_history(&hist, width);
+
+            // tier0: bars must not exceed samples
+            assert!(
+                scheme.tier0_bars <= scheme.tier0_samples,
+                "Width {}: tier0_bars ({}) > tier0_samples ({})",
+                width,
+                scheme.tier0_bars,
+                scheme.tier0_samples
+            );
+
+            // tier1: bars must not exceed samples (if tier1 exists)
+            if scheme.tier1_bars > 0 {
+                assert!(
+                    scheme.tier1_bars <= scheme.tier1_samples,
+                    "Width {}: tier1_bars ({}) > tier1_samples ({})",
+                    width,
+                    scheme.tier1_bars,
+                    scheme.tier1_samples
+                );
+            }
+
+            // tier2: bars must not exceed samples (if tier2 exists)
+            if scheme.tier2_bars > 0 {
+                assert!(
+                    scheme.tier2_bars <= scheme.tier2_samples,
+                    "Width {}: tier2_bars ({}) > tier2_samples ({})",
+                    width,
+                    scheme.tier2_bars,
+                    scheme.tier2_samples
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_at_least_one_third_full_resolution() {
+        // CRITICAL: With lots of history, at least 1/3 of width should be full resolution
+        // This prevents everything from being compressed when window is small
+        // NOTE: Only applies when width >= 9 (below that, compressed view is more useful)
+        let hist = make_history(600); // Full 10 minutes of history
+
+        for width in 9..100 {
+            let (_, scheme) = compress_history(&hist, width);
+
+            // Calculate how many bars are at full 1:1 resolution
+            let full_res_bars = if scheme.tier0_bars == scheme.tier0_samples {
+                scheme.tier0_bars
+            } else {
+                0
+            };
+
+            let min_full_res = width / 3;
+
+            assert!(
+                full_res_bars >= min_full_res,
+                "Width {}: Expected at least {} full-resolution bars (1/3 of width), got {}. \
+                Scheme: tier0: {}→{} ({}x)",
+                width,
+                min_full_res,
+                full_res_bars,
+                scheme.tier0_samples,
+                scheme.tier0_bars,
+                if scheme.tier0_bars > 0 {
+                    (scheme.tier0_samples as f64 / scheme.tier0_bars as f64).ceil() as usize
+                } else {
+                    0
+                }
+            );
+        }
     }
 
     #[test]
