@@ -59,32 +59,13 @@ impl CompressionScheme {
                 return;
             }
 
-            // Try to show compression indicator like "4x" if enough space
-            let indicator = format!("{}x", ratio);
-            let indicator_len = indicator.len();
-
-            if bars >= indicator_len + 2 {
-                // Enough space: center the indicator with spaces
-                let padding_left = (bars - indicator_len) / 2;
-                let padding_right = bars - indicator_len - padding_left;
-
-                for _ in 0..padding_left {
-                    result.push(Span::raw(" "));
-                }
-                for ch in indicator.chars() {
-                    result.push(Span::styled(ch.to_string(), Style::default().fg(color)));
-                }
-                for _ in 0..padding_right {
-                    result.push(Span::raw(" "));
-                }
-            } else {
-                // Not enough space: use fallback single characters
-                for _ in 0..bars {
-                    result.push(Span::styled(
-                        fallback_char.to_string(),
-                        Style::default().fg(color),
-                    ));
-                }
+            // When compressed, show fallback single characters for ALL positions
+            // This makes compression visually obvious across the entire section
+            for _ in 0..bars {
+                result.push(Span::styled(
+                    fallback_char.to_string(),
+                    Style::default().fg(color),
+                ));
             }
         };
 
@@ -739,7 +720,7 @@ mod tests {
         let hist = make_history(600); // Full 10 minutes of history
 
         for width in 5..20 {
-            let (compressed, scheme) = compress_history(&hist, width);
+            let (_compressed, scheme) = compress_history(&hist, width);
 
             assert!(
                 scheme.tier0_bars >= 1,
@@ -768,12 +749,109 @@ mod tests {
     }
 
     #[test]
+    fn test_small_window_small_history_should_compress() {
+        // CRITICAL BUG REPRO: Test various combinations of small widths and history lengths
+        // When history exceeds width, compression MUST be visible across ALL compressed positions
+        // When history equals width, 1:1 is OK (no markers expected)
+
+        // Test various window sizes
+        for width in 5..=15 {
+            // Test history lengths around and above the width
+            for hist_len in width..=(width + 10) {
+                let hist = make_history(hist_len);
+                let (compressed, scheme) = compress_history(&hist, width);
+
+                // Should fill all available width (up to hist_len if smaller)
+                let expected_len = hist_len.min(width);
+                assert_eq!(
+                    compressed.len(),
+                    expected_len,
+                    "width={}, hist_len={}: compressed length should be {}",
+                    width,
+                    hist_len,
+                    expected_len
+                );
+
+                // Check compression markers
+                let markers = scheme.visual_markers();
+                let total_bars = scheme.tier0_bars + scheme.tier1_bars + scheme.tier2_bars;
+
+                assert_eq!(
+                    markers.len(),
+                    total_bars,
+                    "width={}, hist_len={}: markers should match total bars",
+                    width,
+                    hist_len
+                );
+
+                // Count non-space markers (spaces mean 1:1, no compression)
+                let visible_markers = markers.iter().filter(|span| span.content != " ").count();
+
+                // When hist_len > width, compression MUST occur
+                if hist_len > width {
+                    // At least some compressed bars should exist
+                    let _compressed_bars =
+                        if scheme.tier0_bars < scheme.tier0_samples {
+                            // tier0 is compressed
+                            scheme.tier0_bars
+                        } else {
+                            0
+                        } + if scheme.tier1_bars > 0 && scheme.tier1_bars < scheme.tier1_samples {
+                            scheme.tier1_bars
+                        } else {
+                            0
+                        } + if scheme.tier2_bars > 0 && scheme.tier2_bars < scheme.tier2_samples {
+                            scheme.tier2_bars
+                        } else {
+                            0
+                        };
+
+                    // ALL compressed bars should show visible markers (not spaces)
+                    // Each tier with compression (ratio > 1) should show its fallback char for ALL bars
+                    let tier0_visible =
+                        if scheme.tier0_bars > 0 && scheme.tier0_bars < scheme.tier0_samples {
+                            scheme.tier0_bars
+                        } else {
+                            0
+                        };
+                    let tier1_visible =
+                        if scheme.tier1_bars > 0 && scheme.tier1_bars < scheme.tier1_samples {
+                            scheme.tier1_bars
+                        } else {
+                            0
+                        };
+                    let tier2_visible =
+                        if scheme.tier2_bars > 0 && scheme.tier2_bars < scheme.tier2_samples {
+                            scheme.tier2_bars
+                        } else {
+                            0
+                        };
+                    let expected_visible = tier0_visible + tier1_visible + tier2_visible;
+
+                    assert_eq!(
+                        visible_markers, expected_visible,
+                        "width={}, hist_len={}: With {} samples in {} spaces, expected {} visible compression markers but got {}. \
+                        Scheme: tier0: {}→{} ({}x), tier1: {}→{} ({}x), tier2: {}→{} ({}x)",
+                        width, hist_len, hist_len, width, expected_visible, visible_markers,
+                        scheme.tier0_samples, scheme.tier0_bars,
+                        if scheme.tier0_bars > 0 { (scheme.tier0_samples as f64 / scheme.tier0_bars as f64).ceil() as usize } else { 0 },
+                        scheme.tier1_samples, scheme.tier1_bars,
+                        if scheme.tier1_bars > 0 { (scheme.tier1_samples as f64 / scheme.tier1_bars as f64).ceil() as usize } else { 0 },
+                        scheme.tier2_samples, scheme.tier2_bars,
+                        if scheme.tier2_bars > 0 { (scheme.tier2_samples as f64 / scheme.tier2_bars as f64).ceil() as usize } else { 0 }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_small_window_long_tier0_history() {
         // CRITICAL: 30 seconds of history (all in tier0), 10 slots available
         // Should show: some full-res recent samples + compressed older samples
         // NOT: all 30 samples uniformly compressed
         let hist = make_history(30);
-        let (compressed, scheme) = compress_history(&hist, 10);
+        let (compressed, _scheme) = compress_history(&hist, 10);
 
         // Should use tiered compression even within tier0's time range
         // Recent samples at full res, older compressed
@@ -830,7 +908,7 @@ mod tests {
 
         // Test various widths > 600
         for width in 600..1000 {
-            let (compressed, scheme) = compress_history(&hist, width);
+            let (_compressed, scheme) = compress_history(&hist, width);
 
             // Total bars should cap at total samples
             let total_bars = scheme.tier0_bars + scheme.tier1_bars + scheme.tier2_bars;
