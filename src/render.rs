@@ -59,9 +59,19 @@ impl CompressionScheme {
                 return;
             }
 
-            // When compressed, show fallback single characters for ALL positions
-            // This makes compression visually obvious across the entire section
-            for _ in 0..bars {
+            // When compressed, show ratio as first char, then fallback chars for rest
+            // This makes compression visually obvious with exact ratio visible
+
+            // First position: show compression ratio (cap at 9 for single digit)
+            let ratio_char = if ratio <= 9 {
+                ratio.to_string()
+            } else {
+                "9".to_string()
+            };
+            result.push(Span::styled(ratio_char, Style::default().fg(color)));
+
+            // Remaining positions: show fallback chars
+            for _ in 1..bars {
                 result.push(Span::styled(
                     fallback_char.to_string(),
                     Style::default().fg(color),
@@ -607,6 +617,82 @@ mod tests {
             scheme.tier0_bars + scheme.tier1_bars + scheme.tier2_bars
         );
         assert_eq!(markers.len(), 30);
+    }
+
+    #[test]
+    fn test_compression_ratio_shown_as_first_char() {
+        // Test that compression ratio appears as first character in each compressed section
+        let hist = make_history(100); // 100 samples
+        let (_, scheme) = compress_history(&hist, 10);
+        let markers = scheme.visual_markers();
+
+        // With 100 samples in 10 bars, we should see compression
+        // Find the first non-space, non-digit marker to determine tier boundaries
+        let visible_markers: Vec<String> = markers
+            .iter()
+            .map(|span| span.content.to_string())
+            .collect();
+
+        println!("Markers: {:?}", visible_markers);
+        println!(
+            "Scheme: tier0: {}→{} ({}x), tier1: {}→{} ({}x), tier2: {}→{} ({}x)",
+            scheme.tier0_samples,
+            scheme.tier0_bars,
+            if scheme.tier0_bars > 0 {
+                (scheme.tier0_samples as f64 / scheme.tier0_bars as f64).ceil() as usize
+            } else {
+                0
+            },
+            scheme.tier1_samples,
+            scheme.tier1_bars,
+            if scheme.tier1_bars > 0 {
+                (scheme.tier1_samples as f64 / scheme.tier1_bars as f64).ceil() as usize
+            } else {
+                0
+            },
+            scheme.tier2_samples,
+            scheme.tier2_bars,
+            if scheme.tier2_bars > 0 {
+                (scheme.tier2_samples as f64 / scheme.tier2_bars as f64).ceil() as usize
+            } else {
+                0
+            }
+        );
+
+        // Check that compressed sections start with a digit
+        let mut pos = 0;
+
+        // Tier 0: check if compressed
+        if scheme.tier0_bars > 0 && scheme.tier0_bars < scheme.tier0_samples {
+            let first_char = &visible_markers[pos];
+            assert!(
+                first_char.chars().next().unwrap().is_ascii_digit(),
+                "Tier0 first marker should be digit, got: '{}'",
+                first_char
+            );
+        }
+        pos += scheme.tier0_bars;
+
+        // Tier 1: check if compressed
+        if scheme.tier1_bars > 0 && scheme.tier1_bars < scheme.tier1_samples {
+            let first_char = &visible_markers[pos];
+            assert!(
+                first_char.chars().next().unwrap().is_ascii_digit(),
+                "Tier1 first marker should be digit, got: '{}'",
+                first_char
+            );
+        }
+        pos += scheme.tier1_bars;
+
+        // Tier 2: check if compressed
+        if scheme.tier2_bars > 0 && scheme.tier2_bars < scheme.tier2_samples {
+            let first_char = &visible_markers[pos];
+            assert!(
+                first_char.chars().next().unwrap().is_ascii_digit(),
+                "Tier2 first marker should be digit, got: '{}'",
+                first_char
+            );
+        }
     }
 
     #[test]
