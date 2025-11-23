@@ -2,7 +2,7 @@
 use std::collections::VecDeque;
 use sysinfo::{Pid, Process};
 
-const SAMPLE_LIMIT: usize = 60;
+const SAMPLE_LIMIT: usize = 600;
 
 #[derive(Debug)]
 pub struct SProc {

@@ -79,7 +79,29 @@ impl View {
                 .map(|ViewDisplayColumn(_, _, _, _, constraint)| constraint)
                 .copied()
                 .collect();
-            let proc_table = ProcTable::build(sprocs, sort_by, display_columns, &constraints);
+
+            // Calculate available width for CpuHistory column
+            let fixed_width: u16 = vdcols
+                .iter()
+                .filter(|ViewDisplayColumn(dc, _, _, _, _)| {
+                    !matches!(dc, DisplayColumn::CpuHistory)
+                })
+                .map(
+                    |ViewDisplayColumn(_, _, _, _, constraint)| match constraint {
+                        Constraint::Length(n) => *n,
+                        _ => 0,
+                    },
+                )
+                .sum();
+            let cpu_hist_width = (table_area.width.saturating_sub(fixed_width) as usize).max(3);
+
+            let proc_table = ProcTable::build(
+                sprocs,
+                sort_by,
+                display_columns,
+                &constraints,
+                cpu_hist_width,
+            );
             f.render_widget(proc_table, table_area);
 
             // Draw alert.
@@ -116,10 +138,45 @@ impl ProcTable {
         sort_by: SortColumn,
         display_columns: DisplayedColumns,
         constraints: &'a [Constraint],
+        cpu_hist_width: usize,
     ) -> impl tui::widgets::Widget + 'a {
         use DisplayColumn::*;
+
+        // Get compression scheme for visual markers
+        let compression_markers = if !sprocs.is_empty() && cpu_hist_width > 0 {
+            let max_hist_len = sprocs.iter().map(|sp| sp.cpu_hist.len()).max().unwrap_or(0);
+            if max_hist_len > 0 {
+                let longest = sprocs
+                    .iter()
+                    .find(|sp| sp.cpu_hist.len() == max_hist_len)
+                    .unwrap();
+                let (_, scheme) = render::compress_history(&longest.cpu_hist, cpu_hist_width);
+                scheme.visual_markers()
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        };
+
+        // Build header row with visual markers for cpu history
         let header = display_columns.header(&sort_by);
         let vdcols = display_columns.shown();
+        let cpu_hist_pos = vdcols
+            .iter()
+            .position(|ViewDisplayColumn(dc, _, _, _, _)| matches!(dc, CpuHistory));
+        let header_spans: Vec<Spans> = header
+            .into_iter()
+            .enumerate()
+            .map(|(i, text)| {
+                if Some(i) == cpu_hist_pos {
+                    Spans::from(compression_markers.clone())
+                } else {
+                    Spans::from(text)
+                }
+            })
+            .collect();
+
         let rows = sprocs.iter().map(|sp| {
             let mut liveness_style = Style::default();
             if sp.is_dead() {
@@ -141,12 +198,18 @@ impl ProcTable {
                             Spans::from(Span::from(text))
                         }
                     }
-                    CpuHistory => Spans::from(render::render_vec_colored(&sp.cpu_hist, 100.)),
+                    CpuHistory => {
+                        let (compressed, _) =
+                            render::compress_history(&sp.cpu_hist, cpu_hist_width);
+                        Spans::from(render::render_vec_colored(compressed, 100.))
+                    }
                 });
             Row::new(values)
         });
         Table::new(rows)
-            .header(Row::new(header).style(Style::default().add_modifier(Modifier::UNDERLINED)))
+            .header(
+                Row::new(header_spans).style(Style::default().add_modifier(Modifier::UNDERLINED)),
+            )
             .widths(constraints)
     }
 }

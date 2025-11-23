@@ -6,6 +6,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 sparktop is a terminal-based system monitor written in Rust that enhances the traditional `top` utility by tracking historical CPU usage per process. This allows users to see "what caused everything to be slow 30 seconds ago" rather than just current snapshots. The application uses TUI (Terminal User Interface) rendering with crossterm and displays sparklines for CPU history.
 
+## Memory System
+
+**IMPORTANT**: Update this section frequently! After meaningful conversations or when learning new context about the user's setup, preferences, or workflow, add notes here.
+
+**Tiered Memory Architecture:**
+- This file contains **project-level** memories specific to sparktop
+- Global/user-level memories live in `~/.claude/CLAUDE.md`
+- **How to bubble up**: When you learn something important that applies across ALL projects:
+  1. **Do it immediately** - don't wait until end of session
+  2. Read `~/.claude/CLAUDE.md` to locate the "Incoming memories" section
+  3. Use the Edit tool to append a new memory entry with appropriate category
+  4. Format: `- YYYY-MM-DD HH:MM TZ | [category] | project: sparktop | <memory content>`
+  5. Categories: `[tech-pref]`, `[workflow]`, `[tools]`, `[comm]`, `[general]`
+  6. Example: `- 2025-11-22 15:30 PST | [tech-pref] | project: sparktop | User prefers TUI over GUI for system monitors`
+
+### Recent Context & Memories
+
+- Rust-based terminal system monitor
+- Uses EWMA smoothing and ring buffers for historical tracking
+
+### Preferences & Patterns
+
+- Pre-commit hooks must run before committing
+
 ## Build and Development Commands
 
 **Build and run:**
@@ -30,6 +54,29 @@ pre-commit run --all-files     # Run pre-commit hooks (fmt, cargo-check, clippy)
 ```
 
 **Before committing:** Always run `pre-commit run --all-files` or let pre-commit hooks run automatically. The hooks check for large files, merge conflicts, TOML syntax, trailing whitespace, and run fmt/cargo-check/clippy.
+
+## Recent Changes
+
+**2025-11-23: Dynamic history compression - simplified**
+- Extended SAMPLE_LIMIT from 60 to 600 samples (10 minutes of history)
+- Implemented tiered compression that adapts to available terminal width:
+  - Tier 0 (0-2min): Full resolution (1 bar = 1 second)
+  - Tier 1 (2-5min): 4x compression (1 bar = avg of 4 seconds)
+  - Tier 2 (5-10min): 15x compression (1 bar = avg of 15 seconds)
+- Visual compression markers in CPU history header show actual compression ratios:
+  - Full resolution (1:1): no markers shown (spaces)
+  - Compressed sections: displays ratio like "4x" or "15x" when space allows
+  - Narrow columns: falls back to single characters ('.' for low, 'o' for medium, 'O' for heavy compression)
+  - Colors: Cyan (low compression) → Blue (medium) → Dark Gray (heavy)
+- Virtual tiering: when all data is < 120s but exceeds window width, applies progressive compression within that range (e.g., 30s history in 10 slots shows recent at full-res, older compressed)
+- **Major simplification**: Rewrote compress_history from scratch (171 lines vs 330 lines)
+  - Single clear algorithm: tier0 gets full 1:1 when width >= tier0_samples, otherwise progressive compression
+  - No complex branching or edge case handling
+  - All 23 tests pass
+- Stretch detection: Red '!' markers appear if algorithm tries to expand samples
+- Added `cargo test --lib` to pre-commit hooks
+- Compression gracefully degrades when terminal width is limited
+- Each sample rendered as at most 1 bar (never expands data)
 
 ## Architecture
 
