@@ -20,7 +20,8 @@ sparktop can!
   freshly-appeared rows briefly flash
 - [x] hide idle (low-cpu) processes by default
 - [x] name filter / search (`/`)
-- [x] process tree view (`t`), ordered by subtree totals
+- [x] process tree view (`t`), ordered by subtree totals; pruned to active
+  branches + their ancestors by default (`i` expands to the full tree)
 - [x] aggregate same-named processes into one summed row (`a`)
 - [x] system summary header with compact per-core usage sparklines, plus
   cpu, mem/swap, load, uptime, task count

@@ -90,10 +90,12 @@ impl View {
         procs.iter().map(|&sp| (sp, 0)).collect()
     }
 
-    /// The processes to actually display. A name filter (if set) takes
-    /// precedence and shows every match. Otherwise tree mode shows the whole
-    /// hierarchy (idle parents included, or the tree would collapse), while the
-    /// flat list applies hide_idle (always keeping the selected one visible).
+    /// The processes to actually display.
+    /// - a name filter (if set) takes precedence and shows every match;
+    /// - tree mode with hide_idle prunes to active branches plus their full
+    ///   ancestor chains (so the lineage stays intact); without hide_idle it
+    ///   shows the whole tree;
+    /// - the flat list applies hide_idle, always keeping the selected one.
     fn visible<'a>(&self, sprocs: &[&'a SProc]) -> Vec<&'a SProc> {
         if !self.state.filter.is_empty() {
             let needle = self.state.filter.to_lowercase();
@@ -104,7 +106,10 @@ impl View {
                 .collect();
         }
         if self.state.tree {
-            return sprocs.to_vec();
+            if !self.state.hide_idle {
+                return sprocs.to_vec(); // full tree
+            }
+            return self.active_branches(sprocs);
         }
         sprocs
             .iter()
@@ -114,6 +119,32 @@ impl View {
                     || sp.cpu_ewma >= IDLE_CPU_PCT
                     || self.state.selected == Some(sp.pid)
             })
+            .collect()
+    }
+
+    /// Active (or selected) processes plus every ancestor up to the root, so the
+    /// tree keeps each busy process's lineage but drops unrelated idle branches.
+    fn active_branches<'a>(&self, sprocs: &[&'a SProc]) -> Vec<&'a SProc> {
+        let by_pid: HashMap<Pid, &SProc> = sprocs.iter().map(|&p| (p.pid, p)).collect();
+        let mut keep: HashSet<Pid> = HashSet::new();
+        for &p in sprocs {
+            if p.cpu_ewma < IDLE_CPU_PCT && self.state.selected != Some(p.pid) {
+                continue;
+            }
+            // walk up from this active node, stopping once we reach a node (and
+            // therefore a chain) we've already kept
+            let mut cur = Some(p.pid);
+            while let Some(pid) = cur {
+                if !keep.insert(pid) {
+                    break;
+                }
+                cur = by_pid.get(&pid).and_then(|sp| sp.parent);
+            }
+        }
+        sprocs
+            .iter()
+            .copied()
+            .filter(|p| keep.contains(&p.pid))
             .collect()
     }
 
@@ -849,12 +880,29 @@ mod tests {
     }
 
     #[test]
-    fn tree_mode_keeps_idle_parents_visible() {
-        let init = SProc::blank(1, "init"); // cpu 0 -> idle
-        let all = vec![&init];
-        let mut v = View::default(); // hide_idle on, flat
-        assert_eq!(v.visible(&all).len(), 0, "idle hidden in flat list");
-        v.state.tree = true;
-        assert_eq!(v.visible(&all).len(), 1, "tree keeps idle parents");
+    fn tree_prunes_to_active_branches_with_ancestors() {
+        // init(idle) -> shell(idle) -> worker(busy); plus a lonely idle proc
+        let init = SProc::blank(1, "init");
+        let mut shell = SProc::blank(2, "shell");
+        shell.parent = Some(Pid::from(1usize));
+        let mut worker = SProc::blank(3, "worker");
+        worker.parent = Some(Pid::from(2usize));
+        worker.cpu_ewma = 20.0;
+        let lonely = SProc::blank(4, "lonely");
+        let all = vec![&init, &shell, &worker, &lonely];
+
+        let mut v = View::default();
+        v.state.tree = true; // hide_idle on by default
+        let pids: HashSet<u32> = v.visible(&all).iter().map(|s| s.pid.as_u32()).collect();
+        assert!(pids.contains(&3), "active worker kept");
+        assert!(
+            pids.contains(&2) && pids.contains(&1),
+            "ancestors kept for context"
+        );
+        assert!(!pids.contains(&4), "lonely idle branch pruned");
+
+        // show-all expands to the whole tree
+        v.state.hide_idle = false;
+        assert_eq!(v.visible(&all).len(), 4);
     }
 }
