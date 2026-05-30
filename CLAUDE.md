@@ -58,6 +58,30 @@ pre-commit run --all-files     # Run pre-commit hooks (fmt, cargo-check, clippy)
 
 ## Recent Changes
 
+**2026-05-29: Process detail view, navigation, and list features**
+- **Process detail view** (`src/detail.rs`): press `⏎` on a selected process for
+  a full-screen drill-down with high-res braille line charts (ratatui `Chart`,
+  `Marker::Braille`) of its cpu / memory / disk-i/o history. `esc` returns; `↑/↓`
+  flip between processes. Layout is responsive: charts stack vertically, but go
+  side-by-side in short, wide panes (`use_horizontal`).
+- **Selection + navigation**: `ViewState.selected` (a `Pid`, stable across
+  re-sorts); `View` caches display order + a `TableState` for a reversed-video
+  highlight and auto-scroll.
+- **Memory history**: added `SProc.mem_hist` (cpu/disk already had ring buffers).
+  The disk buffers were previously tracked-but-never-rendered; the detail view
+  now uses them.
+- **Hide idle processes** (`i`, on by default): hides procs below `IDLE_CPU_PCT`
+  (0.5%); selected proc always kept visible. Filtering happens in `View::visible`
+  before sort/selection.
+- **Multi-height bars** (`b`, cycles 1/2/3): `render_vec_colored_multi` draws the
+  cpu sparkline across N rows where each row = 100%, so >100% usage stacks
+  visibly.
+- **Reversible sort**: re-selecting the active sort column flips Asc/Desc.
+- **Human-readable disk columns** (`render_bytes` / `render::human_bytes`).
+- Tests: `SProc::blank` test constructor; `detail` uses ratatui `TestBackend` to
+  assert rendered buffer content (don't scrape terminal escapes); ignored
+  `detail::tests::preview` prints sample screens (`--ignored --nocapture`).
+
 **2026-05-29: Reverted history compression + migrated tui → ratatui**
 - **Reverted the dynamic CPU-history compression feature** (it was janky). `render.rs`
   is back to the simple sparkline renderer: each sample is one bar, the table cell
@@ -118,14 +142,17 @@ pre-commit run --all-files     # Run pre-commit hooks (fmt, cargo-check, clippy)
 
 **Rendering:**
 - Uses `ratatui` with the crossterm backend
-- Sparklines rendered in render.rs (`render_vec_colored`); newest sample is leftmost
+- List sparklines in render.rs (`render_vec_colored` / `_multi`); newest sample is
+  leftmost. Detail-view line charts in detail.rs.
 - Dead processes shown in red (Color::Red style)
-- Layout: main table + optional alert box + footer with keybindings
-- Footer text changes based on current Action mode
-- Note: `ViewState::alert` / the alert box are currently dormant (nothing populates
-  `alert` since the "unhandled key" spam was removed). Kept as an error-surface hook —
-  wire it up or delete it if it stays unused.
+- Layout: main table (or detail view) + footer with keybindings
+- Footer text changes based on current Action mode / whether detail is open
 
 **Testing:**
-- `render.rs` has unit tests for `float_bar` / `cpu_color` (run via `cargo test --lib`)
+- Unit tests in render.rs (`float_bar`, `cpu_color`, `human_bytes`, multi-height
+  bars), sproc.rs (history tracking, ewma), view_state.rs (sort flip, column
+  toggle, render_bytes), view.rs (idle filtering).
+- detail.rs renders to ratatui `TestBackend` and asserts on the buffer content
+  (more robust than scraping terminal escapes); `detail::tests::preview` is an
+  `#[ignore]`d visual aid (`cargo test --lib -- --ignored --nocapture`).
 - benches/sysinfo_refresh.rs: benchmarks system refresh performance

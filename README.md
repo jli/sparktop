@@ -12,13 +12,41 @@ sparktop can!
 - [x] per-process cpu usage history
   - instead of just showing most recent sample, can show EWMA
   - can draw sparklines ▁▂▁▄▅▄
+  - taller bars (`b`) give more vertical resolution; one full line = 100%, so
+    multi-core (>100%) usage stacks visibly
+- [x] sortable, toggleable columns
+- [x] hide idle (low-cpu) processes by default
+- [x] process **detail view** (`⏎`): full-screen high-res braille charts of a
+  process's cpu, memory and disk-i/o history
+
+## usage
+
+```bash
+cargo run                  # 1s refresh, ewma weight 0.5
+cargo run -- -d 0.5 -e 0.3 # custom refresh (s) and ewma weight (0..1)
+./bin/local_deploy.sh      # install setuid-root to /usr/local/bin (needed to
+                           # read other users' disk i/o on macOS)
+```
+
+### keys
+
+| key      | action                                             |
+|----------|----------------------------------------------------|
+| `↑`/`↓`  | move selection                                     |
+| `⏎`      | open detail view for the selected process          |
+| `esc`    | back out of detail / a sub-mode                    |
+| `s`      | choose sort column (repeat a column to reverse)    |
+| `c`      | toggle which columns are shown                     |
+| `i`      | show/hide idle (low-cpu) processes                 |
+| `b`      | cycle bar height (1 → 2 → 3)                        |
+| `q` / `^C` | quit                                             |
+
+The footer always lists the keys for the current mode.
 
 ## todo
 
 - display more stable process list
   - group stuff by sort key (perhaps deciles?) and then avoid resorting within each decile, since not that important strict ordering as much as rough neighborhood. use boxes or alternating background color
-- list: toggle columns
-- list: toggle other sparkline graphs
 - list: toggle full/short process name
 - list: other column options? state, ppid, etc.
 - list: pid tree view
@@ -27,7 +55,7 @@ sparktop can!
 - list: regex folding
   - add regexs to create aggregation groups, expandable just like tree groups
   - name display is regex, maybe with representative match name?
-- detailed view: for all selected processes, show higher-granularity sparkline
+- detail view: support multiple selected processes at once
 - action: kill process
 - process groups
   - regexs, subtrees, "selection" UI for arbitrary processes
