@@ -21,6 +21,8 @@ pub struct ViewState {
     pub show_detail: bool,
     /// Hide processes using ~no CPU, to cut clutter. On by default.
     pub hide_idle: bool,
+    /// Rows per process in the list, for taller (higher-res) cpu sparklines.
+    pub bar_height: u16,
     pub should_quit: bool,
     action: Action,
 }
@@ -34,6 +36,7 @@ impl Default for ViewState {
             selected: None,
             show_detail: false,
             hide_idle: true,
+            bar_height: 1,
             should_quit: false,
             action: Action::default(),
         }
@@ -49,6 +52,8 @@ impl ViewState {
             (_, KeyCode::Esc) => self.action = Top,
             (&Top, KeyCode::Char('q')) => self.should_quit = true,
             (&Top, KeyCode::Char('i')) => self.hide_idle = !self.hide_idle,
+            // cycle bar height 1 -> 2 -> 3 -> 1
+            (&Top, KeyCode::Char('b')) => self.bar_height = self.bar_height % 3 + 1,
             (&Top, KeyCode::Char(c)) => {
                 if let Some(a) = Action::action_from_char(c) {
                     self.action = a;
@@ -87,7 +92,7 @@ impl ViewState {
         }
         match &self.action {
             Action::Top => format!(
-                "{}  (i)dle  ↑↓ select  ⏎ details  q quit",
+                "{}  (i)dle (b)ars  ↑↓ select  ⏎ details  q quit",
                 Action::action_help()
             ),
             Action::SelectSort => format!("{}  (repeat to reverse)", Action::sort_col_help()),

@@ -5,8 +5,8 @@ use ratatui::{
     crossterm::event::{KeyCode, KeyEvent},
     layout::{Alignment, Constraint, Layout},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Paragraph, Row, Table, TableState},
+    text::{Line, Span, Text},
+    widgets::{Cell, Paragraph, Row, Table, TableState},
     DefaultTerminal,
 };
 use sysinfo::Pid;
@@ -125,6 +125,7 @@ impl View {
         let display_columns = self.state.displayed_columns.clone();
         let footer = self.state.footer();
         let show_detail = self.state.show_detail;
+        let bar_height = self.state.bar_height;
         let secs_per_sample = self.secs_per_sample;
         let table_state = &mut self.table_state;
         terminal.draw(|f| {
@@ -150,7 +151,8 @@ impl View {
                     .map(|c| c.constraint)
                     .collect();
 
-                let proc_table = ProcTable::build(&procs, sort_by, &display_columns, &constraints);
+                let proc_table =
+                    ProcTable::build(&procs, sort_by, &display_columns, &constraints, bar_height);
                 f.render_stateful_widget(proc_table, rects[0], table_state);
             }
 
@@ -176,6 +178,7 @@ impl ProcTable {
         sort_by: SortColumn,
         display_columns: &DisplayedColumns,
         constraints: &'a [Constraint],
+        bar_height: u16,
     ) -> Table<'a> {
         use DisplayColumn::*;
 
@@ -188,21 +191,29 @@ impl ProcTable {
                 liveness_style = liveness_style.fg(Color::Red);
             }
             let values = vdcols.iter().map(|c| match c.column {
-                Pid => Line::from(Span::styled(sp.pid.to_string(), liveness_style)),
-                ProcessName => Line::from(Span::styled(sp.name.clone(), liveness_style)),
-                DiskRead => Line::from(render_bytes(sp.disk_read_ewma)),
-                DiskWrite => Line::from(render_bytes(sp.disk_write_ewma)),
-                Mem => Line::from(render_metric(sp.mem_mb)),
+                Pid => Cell::from(Span::styled(sp.pid.to_string(), liveness_style)),
+                ProcessName => Cell::from(Span::styled(sp.name.clone(), liveness_style)),
+                DiskRead => Cell::from(render_bytes(sp.disk_read_ewma)),
+                DiskWrite => Cell::from(render_bytes(sp.disk_write_ewma)),
+                Mem => Cell::from(render_metric(sp.mem_mb)),
                 Cpu => {
                     let text = render_metric(sp.cpu_ewma);
                     match render::cpu_color(sp.cpu_ewma) {
-                        Some(color) => Line::from(Span::styled(text, Style::default().fg(color))),
-                        None => Line::from(text),
+                        Some(color) => Cell::from(Span::styled(text, Style::default().fg(color))),
+                        None => Cell::from(text),
                     }
                 }
-                CpuHistory => Line::from(render::render_vec_colored(&sp.cpu_hist, 100.)),
+                // taller bars get more vertical resolution; one Line per row
+                CpuHistory => {
+                    let lines: Vec<Line> =
+                        render::render_vec_colored_multi(&sp.cpu_hist, 100., bar_height as usize)
+                            .into_iter()
+                            .map(Line::from)
+                            .collect();
+                    Cell::from(Text::from(lines))
+                }
             });
-            Row::new(values)
+            Row::new(values).height(bar_height)
         });
 
         Table::new(rows, constraints.iter().copied())
