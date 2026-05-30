@@ -178,7 +178,8 @@ pre-commit run --all-files     # Run pre-commit hooks (fmt, cargo-check, clippy)
 **Rendering:**
 - Uses `ratatui` with the crossterm backend
 - List sparklines in render.rs (`render_vec_colored` / `_multi`); newest sample is
-  leftmost. Detail-view line charts in detail.rs.
+  rightmost (the cpu-history column shows the most-recent `hist_w` samples).
+  Detail-view line charts in detail.rs.
 - Dead processes shown in red (Color::Red style)
 - Layout: main table (or detail view) + footer with keybindings
 - Footer text changes based on current Action mode / whether detail is open

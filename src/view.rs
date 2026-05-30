@@ -43,8 +43,8 @@ pub struct View {
     flash: HashMap<Pid, u8>,
 }
 
-/// How many draws a newly-appeared row stays highlighted.
-const FLASH_TICKS: u8 = 3;
+/// How many draws a newly-appeared row stays highlighted as it fades out.
+const FLASH_TICKS: u8 = 6;
 
 impl View {
     pub fn new(secs_per_sample: f64) -> Self {
@@ -71,7 +71,7 @@ impl View {
     /// column/direction changes or the set of visible pids changes (e.g. a
     /// process crosses the idle threshold, spawns, or dies). Otherwise keep the
     /// previous order so rows stay put while their values update in place.
-    fn flat_rows<'a>(&mut self, procs: &mut Vec<&'a SProc>) -> Vec<(&'a SProc, u16)> {
+    fn flat_rows<'a>(&mut self, procs: &mut Vec<&'a SProc>) -> Vec<(&'a SProc, String)> {
         let pids: HashSet<Pid> = procs.iter().map(|p| p.pid).collect();
         let sort_key = (self.state.sort_by, self.state.sort_dir);
         if self.last_sort != Some(sort_key) || pids != self.flat_pids {
@@ -87,7 +87,7 @@ impl View {
                 .filter_map(|pid| by_pid.get(pid).copied())
                 .collect();
         }
-        procs.iter().map(|&sp| (sp, 0)).collect()
+        procs.iter().map(|&sp| (sp, String::new())).collect()
     }
 
     /// The processes to actually display.
@@ -153,7 +153,7 @@ impl View {
     /// the active sort metric (so a quiet parent with a busy child still floats
     /// up), while each row still displays the process's own value. A process
     /// whose parent isn't in the set becomes a root.
-    fn tree_rows<'a>(&self, procs: &[&'a SProc]) -> Vec<(&'a SProc, u16)> {
+    fn tree_rows<'a>(&self, procs: &[&'a SProc]) -> Vec<(&'a SProc, String)> {
         let present: HashSet<Pid> = procs.iter().map(|p| p.pid).collect();
         let mut children: HashMap<Pid, Vec<&'a SProc>> = HashMap::new();
         let mut roots: Vec<&'a SProc> = Vec::new();
@@ -190,7 +190,7 @@ impl View {
         let mut out = Vec::with_capacity(procs.len());
         let mut visited = HashSet::new();
         for &root in &roots {
-            push_subtree(root, 0, &children, &mut visited, &mut out);
+            push_subtree(root, "", true, true, &children, &mut visited, &mut out);
         }
         out
     }
@@ -301,14 +301,14 @@ impl View {
         };
         let current_pids: HashSet<Pid> = procs.iter().map(|p| p.pid).collect();
         self.note_new_rows(&current_pids);
-        // rows carry a tree depth (0 in flat mode) for name indentation.
+        // each row carries a tree-indent prefix ("" in flat mode).
         // aggregate rows have no parents, so they always use the flat path.
-        let rows: Vec<(&SProc, u16)> = if self.state.tree && !self.state.aggregate {
+        let rows: Vec<(&SProc, String)> = if self.state.tree && !self.state.aggregate {
             self.tree_rows(&procs)
         } else {
             self.flat_rows(&mut procs)
         };
-        self.order = rows.iter().map(|(sp, _)| sp.pid).collect();
+        self.order = rows.iter().map(|r| r.0.pid).collect();
         // keep the highlighted row in sync with the selected pid (and let
         // TableState scroll to keep it visible)
         let selected_index = self.selected_index();
@@ -328,7 +328,7 @@ impl View {
         let secs_per_sample = self.secs_per_sample;
         let summary_line = summary_line(summary);
         let cores = &summary.cores;
-        let flash: HashSet<Pid> = self.flash.keys().copied().collect();
+        let flash = &self.flash;
         let table_state = &mut self.table_state;
         terminal.draw(|f| {
             let full = f.area();
@@ -362,14 +362,26 @@ impl View {
                     .map(|c| c.constraint)
                     .collect();
 
+                // width available to the cpu-history sparkline, so we can show
+                // exactly the most-recent N samples (newest on the right)
+                let fixed: u16 = constraints
+                    .iter()
+                    .map(|c| if let Constraint::Length(n) = c { *n } else { 0 })
+                    .sum();
+                let hist_w = main
+                    .width
+                    .saturating_sub(fixed + constraints.len() as u16)
+                    .max(1) as usize;
+
+                let header = display_columns.header(&sort_by, sort_dir);
                 let proc_table = ProcTable::build(
                     &rows,
-                    sort_by,
-                    sort_dir,
+                    header,
                     &display_columns,
                     &constraints,
                     bar_height,
-                    &flash,
+                    hist_w,
+                    flash,
                 );
                 f.render_stateful_widget(proc_table, main, table_state);
             }
@@ -460,31 +472,43 @@ fn subtree_total(
     total
 }
 
-/// DFS helper for `tree_rows`; `visited` guards against parent cycles.
+/// DFS helper for `tree_rows`, building a box-drawing indent prefix per row
+/// (e.g. "│  ├─ "). `visited` guards against parent cycles.
 fn push_subtree<'a>(
     p: &'a SProc,
-    depth: u16,
+    prefix: &str,
+    is_last: bool,
+    is_root: bool,
     children: &HashMap<Pid, Vec<&'a SProc>>,
     visited: &mut HashSet<Pid>,
-    out: &mut Vec<(&'a SProc, u16)>,
+    out: &mut Vec<(&'a SProc, String)>,
 ) {
     if !visited.insert(p.pid) {
         return;
     }
-    out.push((p, depth));
-    if let Some(kids) = children.get(&p.pid) {
-        for &k in kids {
-            push_subtree(k, depth + 1, children, visited, out);
-        }
-    }
-}
-
-/// Indent a process name by its tree depth (depth 0 = unindented root).
-fn indent_name(name: &str, depth: u16) -> String {
-    if depth == 0 {
-        name.to_string()
+    let connector = if is_root {
+        ""
+    } else if is_last {
+        "╰─ "
     } else {
-        format!("{}↳ {}", "  ".repeat(depth as usize - 1), name)
+        "├─ "
+    };
+    out.push((p, format!("{prefix}{connector}")));
+
+    // children are indented under this node; continue the vertical line unless
+    // this was the last child
+    let child_prefix = if is_root {
+        String::new()
+    } else if is_last {
+        format!("{prefix}   ")
+    } else {
+        format!("{prefix}│  ")
+    };
+    if let Some(kids) = children.get(&p.pid) {
+        let last = kids.len() - 1;
+        for (i, &k) in kids.iter().enumerate() {
+            push_subtree(k, &child_prefix, i == last, false, children, visited, out);
+        }
     }
 }
 
@@ -570,30 +594,30 @@ struct ProcTable();
 
 impl ProcTable {
     fn build<'a>(
-        rows_data: &'a [(&'a SProc, u16)],
-        sort_by: SortColumn,
-        sort_dir: Dir,
+        rows_data: &'a [(&'a SProc, String)],
+        header: Vec<String>,
         display_columns: &DisplayedColumns,
         constraints: &'a [Constraint],
         bar_height: u16,
-        flash: &HashSet<Pid>,
+        hist_w: usize,
+        flash: &HashMap<Pid, u8>,
     ) -> Table<'a> {
         use DisplayColumn::*;
 
-        let header = display_columns.header(&sort_by, sort_dir);
         let vdcols = display_columns.shown();
 
         // per-column maxima (over visible procs) so each numeric column can be
         // shaded relative to its own scale -- big values pop in every column
-        let col_max =
-            |f: fn(&SProc) -> f64| rows_data.iter().map(|&(sp, _)| f(sp)).fold(0.0, f64::max);
+        let col_max = |f: fn(&SProc) -> f64| rows_data.iter().map(|r| f(r.0)).fold(0.0, f64::max);
         let max_cpu = col_max(|sp| sp.cpu_ewma);
         let max_mem = col_max(|sp| sp.mem_bytes);
         let max_dr = col_max(|sp| sp.disk_read_ewma);
         let max_dw = col_max(|sp| sp.disk_write_ewma);
         let max_disk = col_max(|sp| sp.disk_read_ewma + sp.disk_write_ewma);
 
-        let rows = rows_data.iter().map(move |&(sp, depth)| {
+        let rows = rows_data.iter().map(move |row| {
+            let sp = row.0;
+            let prefix = row.1.as_str();
             let mut liveness_style = Style::default();
             if sp.is_dead() {
                 liveness_style = liveness_style.fg(Color::Red);
@@ -607,7 +631,16 @@ impl ProcTable {
                     Cell::from(Span::styled(sp.state.to_string(), style))
                 }
                 ProcessName => {
-                    Cell::from(Span::styled(indent_name(&sp.name, depth), liveness_style))
+                    // dim tree-indent prefix, then the name
+                    let mut spans = Vec::new();
+                    if !prefix.is_empty() {
+                        spans.push(Span::styled(
+                            prefix.to_string(),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
+                    spans.push(Span::styled(sp.name.clone(), liveness_style));
+                    Cell::from(Line::from(spans))
                 }
                 Disk => {
                     let v = sp.disk_read_ewma + sp.disk_write_ewma;
@@ -627,10 +660,13 @@ impl ProcTable {
                 ),
                 Mem => heat_cell(render_bytes(sp.mem_bytes), sp.mem_bytes, max_mem, sp),
                 Cpu => heat_cell(render_metric(sp.cpu_ewma), sp.cpu_ewma, max_cpu, sp),
-                // taller bars get more vertical resolution; one Line per row
+                // most-recent samples, newest on the right (like the other
+                // graphs); taller bars add vertical resolution (one Line/row)
                 CpuHistory => {
+                    // most-recent `hist_w` samples, reversed so newest is rightmost
+                    let samples = sp.cpu_hist.iter().take(hist_w).rev().copied();
                     let lines: Vec<Line> =
-                        render::render_vec_colored_multi(&sp.cpu_hist, 100., bar_height as usize)
+                        render::render_vec_colored_multi(samples, 100., bar_height as usize)
                             .into_iter()
                             .map(Line::from)
                             .collect();
@@ -638,9 +674,16 @@ impl ProcTable {
                 }
             });
             let mut row = Row::new(values).height(bar_height);
-            if flash.contains(&sp.pid) {
-                // freshly-appeared row: amber wash that fades over a few ticks
-                row = row.style(Style::default().bg(Color::Rgb(80, 70, 20)));
+            if let Some(&ticks) = flash.get(&sp.pid) {
+                // freshly-appeared row: amber wash that fades to black over its
+                // remaining ticks, so newer arrivals are brighter than older
+                let t = ticks as f32 / FLASH_TICKS as f32;
+                let amber = |v: f32| (v * t).round() as u8;
+                row = row.style(Style::default().bg(Color::Rgb(
+                    amber(110.0),
+                    amber(90.0),
+                    amber(30.0),
+                )));
             }
             row
         });
@@ -761,22 +804,22 @@ mod tests {
         let rows = View::default().tree_rows(&all);
         assert_eq!(rows.len(), 5);
 
-        let depth = |pid: u32| {
+        // indent prefix grows with depth (3 box-drawing chars per level)
+        let indent = |pid: u32| {
             rows.iter()
-                .find(|(sp, _)| sp.pid.as_u32() == pid)
+                .find(|r| r.0.pid.as_u32() == pid)
                 .unwrap()
                 .1
+                .chars()
+                .count()
         };
-        assert_eq!(
-            (depth(1), depth(2), depth(3), depth(4), depth(5)),
-            (0, 1, 2, 0, 0)
-        );
+        assert_eq!(indent(1), 0, "root unindented");
+        assert!(indent(2) > 0, "child indented");
+        assert!(indent(3) > indent(2), "grandchild deeper");
+        assert_eq!(indent(4), 0, "standalone root");
+        assert_eq!(indent(5), 0, "orphan becomes root");
 
-        let pos = |pid: u32| {
-            rows.iter()
-                .position(|(sp, _)| sp.pid.as_u32() == pid)
-                .unwrap()
-        };
+        let pos = |pid: u32| rows.iter().position(|r| r.0.pid.as_u32() == pid).unwrap();
         assert!(pos(1) < pos(2) && pos(2) < pos(3)); // children follow their parent
     }
 
@@ -796,15 +839,8 @@ mod tests {
 
         // default sort is Cpu, Desc
         let rows = View::default().tree_rows(&all);
-        let pids: Vec<u32> = rows.iter().map(|(sp, _)| sp.pid.as_u32()).collect();
+        let pids: Vec<u32> = rows.iter().map(|r| r.0.pid.as_u32()).collect();
         assert_eq!(pids, vec![1, 2, 3]); // A, child-of-A, then B
-    }
-
-    #[test]
-    fn indent_name_indents_by_depth() {
-        assert_eq!(indent_name("x", 0), "x");
-        assert_eq!(indent_name("x", 1), "↳ x");
-        assert_eq!(indent_name("x", 2), "  ↳ x");
     }
 
     #[test]
@@ -867,7 +903,7 @@ mod tests {
         let mut v = View::default(); // Cpu, Desc
 
         let order =
-            |rows: &[(&SProc, u16)]| rows.iter().map(|(s, _)| s.pid.as_u32()).collect::<Vec<_>>();
+            |rows: &[(&SProc, String)]| rows.iter().map(|r| r.0.pid.as_u32()).collect::<Vec<_>>();
 
         // initial: a(10) above b(5)
         let rows = v.flat_rows(&mut vec![&a, &b]);

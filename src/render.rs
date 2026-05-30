@@ -52,15 +52,15 @@ pub fn human_bytes(bytes: f64) -> String {
 /// row represents one full `max` (i.e. 100%), so a value of `max` fills exactly
 /// one line and values past `max` stack into the rows above -- making >100%
 /// (multi-core) usage visible. Returns one span-row per output line, top first.
-pub fn render_vec_colored_multi<'a, II>(xs: II, max: f64, height: usize) -> Vec<Vec<Span<'a>>>
+pub fn render_vec_colored_multi<II>(xs: II, max: f64, height: usize) -> Vec<Vec<Span<'static>>>
 where
-    II: IntoIterator<Item = &'a f64>,
+    II: IntoIterator<Item = f64>,
 {
     let height = height.max(1);
     let mut rows: Vec<Vec<Span>> = (0..height).map(|_| Vec::new()).collect();
     for x in xs {
-        let p = *x / max; // 1.0 == one full row; not clamped, so >100% stacks up
-        let color = cpu_color(*x);
+        let p = x / max; // 1.0 == one full row; not clamped, so >100% stacks up
+        let color = cpu_color(x);
         for (r, row) in rows.iter_mut().enumerate() {
             // band 0 is the bottom row; r == 0 is the top row
             let band = (height - 1 - r) as f64;
@@ -180,7 +180,7 @@ mod tests {
     fn multi_height_matches_single_at_height_one() {
         let hist = [0.0, 50.0, 100.0];
         let single = render_vec_colored(hist.iter(), 100.);
-        let multi = render_vec_colored_multi(hist.iter(), 100., 1);
+        let multi = render_vec_colored_multi(hist.iter().copied(), 100., 1);
         assert_eq!(multi.len(), 1);
         let multi_syms: Vec<_> = multi[0].iter().map(|s| s.content.to_string()).collect();
         let single_syms: Vec<_> = single.iter().map(|s| s.content.to_string()).collect();
@@ -191,18 +191,18 @@ mod tests {
     fn multi_height_one_full_line_per_100_percent() {
         // rows[0] is the top, rows[2] the bottom. Each row == 100%.
         // 100% fills only the bottom row...
-        let rows = render_vec_colored_multi([100.0].iter(), 100., 3);
+        let rows = render_vec_colored_multi([100.0].iter().copied(), 100., 3);
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[2][0].content.as_ref(), "█"); // bottom full
         assert_eq!(rows[1][0].content.as_ref(), " "); // middle empty
         assert_eq!(rows[0][0].content.as_ref(), " "); // top empty
 
         // ...300% fills all three rows (visible multi-core usage)
-        let rows = render_vec_colored_multi([300.0].iter(), 100., 3);
+        let rows = render_vec_colored_multi([300.0].iter().copied(), 100., 3);
         assert!(rows.iter().all(|r| r[0].content.as_ref() == "█"));
 
         // a zero sample fills nothing
-        let rows = render_vec_colored_multi([0.0].iter(), 100., 3);
+        let rows = render_vec_colored_multi([0.0].iter().copied(), 100., 3);
         assert!(rows.iter().all(|r| r[0].content.as_ref() == " "));
     }
 
