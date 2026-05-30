@@ -194,6 +194,7 @@ pub enum DisplayColumn {
     User,
     State,
     ProcessName,
+    Disk,
     DiskRead,
     DiskWrite,
     Mem,
@@ -209,7 +210,7 @@ pub struct ViewDisplayColumn {
     pub constraint: Constraint,
 }
 
-const VIEW_DISPLAY_COLUMNS: [ViewDisplayColumn; 9] = [
+const VIEW_DISPLAY_COLUMNS: [ViewDisplayColumn; 10] = [
     ViewDisplayColumn {
         column: DisplayColumn::Pid,
         key: 'p',
@@ -237,6 +238,13 @@ const VIEW_DISPLAY_COLUMNS: [ViewDisplayColumn; 9] = [
         help: "process-(n)ame",
         header: "process",
         constraint: Constraint::Length(24),
+    },
+    ViewDisplayColumn {
+        column: DisplayColumn::Disk,
+        key: 'd',
+        help: "(d)isk",
+        header: "disk",
+        constraint: Constraint::Length(7),
     },
     ViewDisplayColumn {
         column: DisplayColumn::DiskRead,
@@ -282,8 +290,21 @@ pub struct DisplayedColumns(HashSet<DisplayColumn>);
 
 impl Default for DisplayedColumns {
     fn default() -> Self {
-        // everything visible by default
-        Self(VIEW_DISPLAY_COLUMNS.iter().map(|c| c.column).collect())
+        // pid/user and the split disk columns are off by default (combined
+        // "disk" is shown instead); toggle them on with 'c'.
+        const HIDDEN: [DisplayColumn; 4] = [
+            DisplayColumn::Pid,
+            DisplayColumn::User,
+            DisplayColumn::DiskRead,
+            DisplayColumn::DiskWrite,
+        ];
+        Self(
+            VIEW_DISPLAY_COLUMNS
+                .iter()
+                .map(|c| c.column)
+                .filter(|c| !HIDDEN.contains(c))
+                .collect(),
+        )
     }
 }
 
@@ -359,7 +380,7 @@ impl PartialEq<DisplayColumn> for SortColumn {
                 | (S::Mem, D::Mem)
                 | (S::DiskRead, D::DiskRead)
                 | (S::DiskWrite, D::DiskWrite)
-                | (S::DiskTotal, D::DiskWrite | D::DiskRead)
+                | (S::DiskTotal, D::DiskWrite | D::DiskRead | D::Disk)
         )
     }
 }
@@ -464,20 +485,22 @@ mod tests {
         let mut vs = ViewState::default();
         let before = vs.displayed_columns.shown().len();
         vs.handle_key(key('c')); // column mode
-        vs.handle_key(key('p')); // toggle pid off
+        vs.handle_key(key('m')); // toggle mem (shown by default) off
         assert_eq!(vs.displayed_columns.shown().len(), before - 1);
         vs.handle_key(key('c'));
-        vs.handle_key(key('p')); // back on
+        vs.handle_key(key('m')); // back on
         assert_eq!(vs.displayed_columns.shown().len(), before);
     }
 
     #[test]
-    fn user_and_state_columns_shown_by_default() {
+    fn default_columns_hide_pid_user_and_split_disk() {
         let headers = DisplayedColumns::default().header(&SortColumn::Cpu, Dir::Desc);
-        assert!(headers.iter().any(|h| h == "user"));
-        assert!(headers.iter().any(|h| h == "st"));
-        // the sorted column carries a direction arrow
-        assert!(headers.iter().any(|h| h == "cpu▾"));
+        assert!(headers.iter().any(|h| h == "st")); // state shown
+        assert!(headers.iter().any(|h| h == "disk")); // combined disk shown
+        assert!(headers.iter().any(|h| h == "cpu▾")); // sort arrow
+        assert!(!headers.iter().any(|h| h == "pid"));
+        assert!(!headers.iter().any(|h| h == "user"));
+        assert!(!headers.iter().any(|h| h == "dr" || h == "dw"));
     }
 
     #[test]

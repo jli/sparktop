@@ -488,16 +488,29 @@ fn indent_name(name: &str, depth: u16) -> String {
     }
 }
 
-/// Compact per-core usage sparklines for the header: "0 ▁▂▃ 1 ▅▆▇ ...",
-/// each core colored by load, packed as many per row as the width allows.
+/// Width (in chars) reserved for each core's sparkline, regardless of how many
+/// samples have accumulated, so the grid doesn't reflow as history fills in.
+const CORE_SPARK_LEN: usize = 16;
+/// Preferred cores per row (8 cores -> 2 rows); reduced to fit narrow terminals.
+const CORE_PER_ROW: usize = 4;
+
+/// Compact per-core usage sparklines for the header: "0 ▁▂▃ 1 ▅▆▇ ...", each
+/// core colored by load. Cells are fixed width (bars grow from the right as
+/// history fills) and laid out in a balanced grid that targets CORE_PER_ROW per
+/// row but adapts to the terminal width and core count.
 fn core_lines(cores: &[Vec<f64>], width: u16) -> Vec<Line<'static>> {
     if cores.is_empty() {
         return Vec::new();
     }
-    let spark_len = cores.iter().map(|c| c.len()).max().unwrap_or(0);
-    let label_w = (cores.len().saturating_sub(1)).to_string().len();
-    let cell_w = label_w + 1 + spark_len + 1; // "N " + spark + gap
-    let per_row = (width as usize / cell_w.max(1)).max(1);
+    let n = cores.len();
+    let label_w = (n - 1).to_string().len();
+    let cell_w = label_w + 1 + CORE_SPARK_LEN + 1; // "N " + spark + gap
+    let fit = (width as usize / cell_w).max(1);
+    // target up to CORE_PER_ROW, capped by what fits and the core count, then
+    // balance evenly across the resulting number of rows
+    let target = CORE_PER_ROW.min(fit).min(n);
+    let rows = n.div_ceil(target);
+    let per_row = n.div_ceil(rows);
 
     let cells: Vec<Vec<Span>> = cores
         .iter()
@@ -507,7 +520,13 @@ fn core_lines(cores: &[Vec<f64>], width: u16) -> Vec<Line<'static>> {
                 format!("{i:>label_w$} "),
                 Style::default().fg(Color::DarkGray),
             )];
-            for &v in samples {
+            // right-align the bars in a fixed field: pad missing samples so the
+            // layout stays put while the history populates
+            let shown = samples.len().min(CORE_SPARK_LEN);
+            for _ in 0..CORE_SPARK_LEN - shown {
+                cell.push(Span::raw(" "));
+            }
+            for &v in samples.iter().take(CORE_SPARK_LEN) {
                 let frac = (v / 100.0).clamp(0.0, 1.0);
                 cell.push(Span::styled(
                     render::float_bar(frac).to_string(),
@@ -572,6 +591,7 @@ impl ProcTable {
         let max_mem = col_max(|sp| sp.mem_bytes);
         let max_dr = col_max(|sp| sp.disk_read_ewma);
         let max_dw = col_max(|sp| sp.disk_write_ewma);
+        let max_disk = col_max(|sp| sp.disk_read_ewma + sp.disk_write_ewma);
 
         let rows = rows_data.iter().map(move |&(sp, depth)| {
             let mut liveness_style = Style::default();
@@ -588,6 +608,10 @@ impl ProcTable {
                 }
                 ProcessName => {
                     Cell::from(Span::styled(indent_name(&sp.name, depth), liveness_style))
+                }
+                Disk => {
+                    let v = sp.disk_read_ewma + sp.disk_write_ewma;
+                    heat_cell(render_bytes(v), v, max_disk, sp)
                 }
                 DiskRead => heat_cell(
                     render_bytes(sp.disk_read_ewma),
@@ -648,10 +672,21 @@ mod tests {
     }
 
     #[test]
-    fn core_lines_pack_to_width() {
-        let cores = vec![vec![10.0, 50.0, 100.0], vec![0.0, 0.0, 0.0]];
-        assert_eq!(core_lines(&cores, 200).len(), 1); // wide: both on one row
-        assert_eq!(core_lines(&cores, 8).len(), 2); // narrow: one core per row
+    fn core_lines_grid_is_balanced_and_stable() {
+        // 8 cores, wide terminal -> 2 rows of 4 (default CORE_PER_ROW)
+        let eight: Vec<Vec<f64>> = (0..8).map(|_| vec![10.0]).collect();
+        assert_eq!(core_lines(&eight, 240).len(), 2);
+
+        // layout doesn't change as history fills (1 sample vs full)
+        let eight_full: Vec<Vec<f64>> = (0..8).map(|_| vec![10.0; CORE_SPARK_LEN]).collect();
+        assert_eq!(
+            core_lines(&eight, 240).len(),
+            core_lines(&eight_full, 240).len()
+        );
+
+        // narrow terminal fits fewer per row -> more rows
+        assert!(core_lines(&eight, 40).len() > 2);
+
         assert!(core_lines(&[], 80).is_empty());
     }
 

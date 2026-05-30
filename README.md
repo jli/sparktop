@@ -14,7 +14,9 @@ sparktop can!
   - can draw sparklines ▁▂▁▄▅▄
   - taller bars (`b`) give more vertical resolution; one full line = 100%, so
     multi-core (>100%) usage stacks visibly
-- [x] sortable (with direction arrow), toggleable columns (pid, user, state, name, disk r/w, mem, cpu)
+- [x] sortable (with direction arrow), toggleable columns — default shows
+  state, name, combined disk, mem, cpu; pid/user and split disk r/w are off by
+  default (toggle with `c`)
 - [x] numeric columns heat-shaded (green→red) by value, so high values pop
 - [x] stable row order (no jitter) — only re-sorts when the active set changes;
   freshly-appeared rows briefly flash
