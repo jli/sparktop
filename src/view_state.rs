@@ -187,6 +187,8 @@ const VIEW_ACTIONS: [ViewAction; 2] = [
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DisplayColumn {
     Pid,
+    User,
+    State,
     ProcessName,
     DiskRead,
     DiskWrite,
@@ -203,13 +205,27 @@ pub struct ViewDisplayColumn {
     pub constraint: Constraint,
 }
 
-const VIEW_DISPLAY_COLUMNS: [ViewDisplayColumn; 7] = [
+const VIEW_DISPLAY_COLUMNS: [ViewDisplayColumn; 9] = [
     ViewDisplayColumn {
         column: DisplayColumn::Pid,
         key: 'p',
         help: "(p)id",
         header: "pid",
         constraint: Constraint::Length(6),
+    },
+    ViewDisplayColumn {
+        column: DisplayColumn::User,
+        key: 'u',
+        help: "(u)ser",
+        header: "user",
+        constraint: Constraint::Length(9),
+    },
+    ViewDisplayColumn {
+        column: DisplayColumn::State,
+        key: 'e',
+        help: "stat(e)",
+        header: "st",
+        constraint: Constraint::Length(2),
     },
     ViewDisplayColumn {
         column: DisplayColumn::ProcessName,
@@ -445,6 +461,13 @@ mod tests {
         vs.handle_key(key('c'));
         vs.handle_key(key('p')); // back on
         assert_eq!(vs.displayed_columns.shown().len(), before);
+    }
+
+    #[test]
+    fn user_and_state_columns_shown_by_default() {
+        let headers = DisplayedColumns::default().header(&SortColumn::Cpu);
+        assert!(headers.iter().any(|h| h == "user"));
+        assert!(headers.iter().any(|h| h == "st"));
     }
 
     #[test]

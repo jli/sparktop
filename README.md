@@ -14,13 +14,14 @@ sparktop can!
   - can draw sparklines ▁▂▁▄▅▄
   - taller bars (`b`) give more vertical resolution; one full line = 100%, so
     multi-core (>100%) usage stacks visibly
-- [x] sortable, toggleable columns
+- [x] sortable, toggleable columns (pid, user, state, name, disk r/w, mem, cpu)
 - [x] numeric columns heat-shaded (green→red) by value, so high values pop
 - [x] hide idle (low-cpu) processes by default
 - [x] name filter / search (`/`)
-- [x] process tree view (`t`)
+- [x] process tree view (`t`), ordered by subtree totals
 - [x] system summary header (cpu, mem/swap, load, uptime, task count)
-- [x] process **detail view** (`⏎`): full-screen high-res braille charts of a
+- [x] process **detail view** (`⏎`): identity (user, ppid, state, threads,
+  run-time), full **cmdline**, and full-screen high-res braille charts of a
   process's cpu, memory and disk-i/o history
 
 ## usage

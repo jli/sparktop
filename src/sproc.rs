@@ -1,15 +1,24 @@
 /// SProc: a single process.
 use std::collections::VecDeque;
-use sysinfo::{Pid, Process};
+use sysinfo::{Pid, Process, ProcessStatus};
 
 const SAMPLE_LIMIT: usize = 60;
 
 #[derive(Debug)]
 pub struct SProc {
-    // TODO: cmd?
     pub pid: Pid,
     pub parent: Option<Pid>,
     pub name: String,
+    /// full command line (falls back to name if unavailable)
+    pub cmd: String,
+    /// owning user name (or uid / "?" if unresolved)
+    pub user: String,
+    /// single-char process state (R/S/D/Z/T/I/...)
+    pub state: char,
+    /// thread count (0 if the platform doesn't report it)
+    pub threads: usize,
+    /// seconds the process has been running
+    pub run_secs: u64,
     pub cpu_ewma: f64,
     pub cpu_hist: VecDeque<f64>,
     /// resident memory in bytes (sysinfo reports bytes since 0.30)
@@ -40,6 +49,10 @@ impl SProc {
 
     pub fn add_sample(&mut self, p: &Process, ewma_weight: f64) {
         let du = p.disk_usage();
+        // these can change over a process's life, so refresh each tick
+        self.state = status_char(p.status());
+        self.threads = p.tasks().map_or(0, |t| t.len());
+        self.run_secs = p.run_time();
         self.add_sample_helper(
             p.cpu_usage().into(),
             p.memory(),
@@ -50,6 +63,7 @@ impl SProc {
     }
 
     pub fn add_dead_sample(&mut self, ewma_weight: f64) -> DeadStatus {
+        self.state = 'X';
         self.add_sample_helper(0., 0, 0, 0, ewma_weight);
         // probably an off-by-one or two in here but whatevs
         match &mut self.tombstone {
@@ -83,24 +97,49 @@ impl SProc {
     }
 }
 
-impl From<&Process> for SProc {
-    fn from(p: &Process) -> Self {
+impl SProc {
+    /// Build from a freshly-sampled process. `user` is resolved by the caller
+    /// (which holds the system user table).
+    pub fn new(p: &Process, user: String) -> Self {
         let du = p.disk_usage();
+        let cmd = p.cmd().join(" ");
         Self {
             pid: p.pid(),
             parent: p.parent(),
             name: p.name().into(),
+            cmd: if cmd.is_empty() { p.name().into() } else { cmd },
+            user,
+            state: status_char(p.status()),
+            threads: p.tasks().map_or(0, |t| t.len()),
+            run_secs: p.run_time(),
             cpu_ewma: p.cpu_usage().into(),
-            // TODO: how does the final into() work?
             cpu_hist: vec![p.cpu_usage().into()].into(),
             mem_bytes: p.memory() as f64,
             mem_hist: vec![p.memory() as f64].into(),
-            disk_read_ewma: du.read_bytes as f64, // TODO: how come no into()?
+            disk_read_ewma: du.read_bytes as f64,
             disk_read_hist: vec![du.read_bytes].into(),
             disk_write_ewma: du.written_bytes as f64,
             disk_write_hist: vec![du.written_bytes].into(),
             tombstone: None,
         }
+    }
+}
+
+fn status_char(s: ProcessStatus) -> char {
+    use ProcessStatus::*;
+    match s {
+        Run => 'R',
+        Sleep => 'S',
+        Idle => 'I',
+        Stop => 'T',
+        Zombie => 'Z',
+        Tracing => 't',
+        Dead => 'X',
+        UninterruptibleDiskSleep => 'D',
+        Parked => 'P',
+        Waking | Wakekill => 'W',
+        LockBlocked => 'L',
+        Unknown(_) => '?',
     }
 }
 
@@ -121,6 +160,11 @@ impl SProc {
             pid: Pid::from(pid as usize),
             parent: None,
             name: name.to_string(),
+            cmd: name.to_string(),
+            user: "root".to_string(),
+            state: 'R',
+            threads: 1,
+            run_secs: 0,
             cpu_ewma: 0.0,
             cpu_hist: VecDeque::new(),
             mem_bytes: 0.0,

@@ -58,6 +58,16 @@ pre-commit run --all-files     # Run pre-commit hooks (fmt, cargo-check, clippy)
 
 ## Recent Changes
 
+**2026-05-30: user/state columns + richer detail view**
+- `SProc` gained `user`, `state` (char), `cmd`, `threads`, `run_secs` (and
+  `parent` earlier). `SProc::new(p, user)` replaces the old `From<&Process>`;
+  `SProcs` holds a `Users` table and resolves the owner name on insert.
+- New toggleable **user** (`u`) and **state** (`e`) columns; state is color-coded
+  (R green, D/Z red, X gray).
+- **Detail view** header expanded to identity (pid/ppid/user/state/threads/uptime),
+  a metrics line, and the full **cmdline** (wrapped). `fmt_uptime` moved to
+  render.rs (shared by the summary header and detail).
+
 **2026-05-30: Gap-analysis features (vs bottom/btop/htop/zenith)**
 - **Name filter / search** (`/`): `ViewState.filter` + `filtering`; `View::visible`
   filters by name substring (takes precedence over hide_idle).

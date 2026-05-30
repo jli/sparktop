@@ -304,7 +304,7 @@ fn summary_line(s: &SysSummary) -> Line<'static> {
         s.load.0,
         s.load.1,
         s.load.2,
-        fmt_uptime(s.uptime),
+        render::fmt_uptime(s.uptime),
         s.tasks
     )));
     Line::from(spans)
@@ -365,17 +365,6 @@ fn indent_name(name: &str, depth: u16) -> String {
     }
 }
 
-fn fmt_uptime(secs: u64) -> String {
-    let (d, h, m) = (secs / 86400, (secs % 86400) / 3600, (secs % 3600) / 60);
-    if d > 0 {
-        format!("{d}d{h}h")
-    } else if h > 0 {
-        format!("{h}h{m}m")
-    } else {
-        format!("{m}m")
-    }
-}
-
 /// A numeric cell shaded by where `val` falls in [0, max] (green->red). Dead
 /// processes and near-zero values ("_") are left unshaded so they recede.
 fn heat_cell(text: String, val: f64, max: f64, sp: &SProc) -> Cell<'static> {
@@ -420,6 +409,16 @@ impl ProcTable {
             }
             let values = vdcols.iter().map(|c| match c.column {
                 Pid => Cell::from(Span::styled(sp.pid.to_string(), liveness_style)),
+                User => Cell::from(Span::styled(sp.user.clone(), liveness_style)),
+                State => {
+                    let style = match sp.state {
+                        'R' => Style::default().fg(Color::Green),
+                        'D' | 'Z' => Style::default().fg(Color::Red),
+                        'X' => Style::default().fg(Color::DarkGray),
+                        _ => Style::default(),
+                    };
+                    Cell::from(Span::styled(sp.state.to_string(), style))
+                }
                 ProcessName => {
                     Cell::from(Span::styled(indent_name(&sp.name, depth), liveness_style))
                 }
@@ -498,13 +497,6 @@ mod tests {
         assert!(text.contains("up 1d1h"));
         assert!(text.contains("123 tasks"));
         assert!(!text.contains("swap")); // hidden when there's no swap
-    }
-
-    #[test]
-    fn fmt_uptime_formats() {
-        assert_eq!(fmt_uptime(90_061), "1d1h");
-        assert_eq!(fmt_uptime(3_700), "1h1m");
-        assert_eq!(fmt_uptime(120), "2m");
     }
 
     #[test]

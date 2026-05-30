@@ -1,12 +1,13 @@
 /// SProcs: a collection of all processes on the system.
 use std::collections::{hash_map::Values, HashMap};
 
-use sysinfo::{Pid, System};
+use sysinfo::{Pid, System, Users};
 
 use crate::sproc::{DeadStatus, SProc};
 
 pub struct SProcs {
     sys: System,
+    users: Users,
     sprocs: HashMap<Pid, SProc>,
 }
 
@@ -26,6 +27,7 @@ impl Default for SProcs {
     fn default() -> Self {
         Self {
             sys: System::new_all(),
+            users: Users::new_with_refreshed_list(),
             sprocs: HashMap::default(),
         }
     }
@@ -40,13 +42,21 @@ impl SProcs {
         self.sys.refresh_cpu();
         self.sys.refresh_memory();
         self.sys.refresh_processes();
+        let users = &self.users;
         let latest_procs = self.sys.processes();
         for (&pid, proc) in latest_procs {
             log::debug!("handling {} {} {}", pid, proc.name(), proc.cpu_usage());
             self.sprocs
                 .entry(pid)
                 .and_modify(|sp| sp.add_sample(proc, ewma_weight))
-                .or_insert_with(|| proc.into());
+                .or_insert_with(|| {
+                    let user = proc
+                        .user_id()
+                        .and_then(|uid| users.get_user_by_id(uid))
+                        .map(|u| u.name().to_string())
+                        .unwrap_or_else(|| "?".to_string());
+                    SProc::new(proc, user)
+                });
         }
 
         // TODO: do this more concisely.

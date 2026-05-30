@@ -5,11 +5,11 @@ use ratatui::{
     style::{Color, Modifier, Style},
     symbols::Marker,
     text::{Line, Span},
-    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph},
+    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph, Wrap},
     Frame,
 };
 
-use crate::render::human_bytes;
+use crate::render::{fmt_uptime, human_bytes};
 use crate::sproc::SProc;
 
 /// One series to plot: legend name, line color, and (x, y) points.
@@ -28,7 +28,7 @@ fn use_horizontal(area: Rect) -> bool {
 
 pub fn render_detail(f: &mut Frame, area: Rect, sp: &SProc, secs_per_sample: f64) {
     let rows = Layout::vertical([
-        Constraint::Length(1), // header
+        Constraint::Length(4), // header (identity / metrics / cmdline)
         Constraint::Min(0),    // charts
     ])
     .split(area);
@@ -86,16 +86,39 @@ fn render_header(f: &mut Frame, area: Rect, sp: &SProc) {
     if sp.is_dead() {
         name = name.fg(Color::Red);
     }
-    let header = Line::from(vec![
+    let ppid = sp.parent.map_or_else(|| "-".to_string(), |p| p.to_string());
+    let threads = if sp.threads > 0 {
+        sp.threads.to_string()
+    } else {
+        "-".to_string()
+    };
+
+    let identity = Line::from(vec![
         Span::styled(format!(" {} ", sp.name), name),
         Span::raw(format!(
-            "  pid {}   cpu {:.1}%   mem {}",
+            "  pid {}  ppid {}  user {}  state {}  threads {}  up {}",
             sp.pid,
-            sp.cpu_ewma,
-            human_bytes(sp.mem_bytes)
+            ppid,
+            sp.user,
+            sp.state,
+            threads,
+            fmt_uptime(sp.run_secs)
         )),
     ]);
-    f.render_widget(Paragraph::new(header), area);
+    let metrics = Line::from(format!(
+        "cpu {:.1}%   mem {}   read {}   write {}",
+        sp.cpu_ewma,
+        human_bytes(sp.mem_bytes),
+        human_bytes(sp.disk_read_ewma),
+        human_bytes(sp.disk_write_ewma),
+    ));
+    let cmd = Line::from(Span::styled(
+        sp.cmd.clone(),
+        Style::default().fg(Color::DarkGray),
+    ));
+
+    let para = Paragraph::new(vec![identity, metrics, cmd]).wrap(Wrap { trim: true });
+    f.render_widget(para, area);
 }
 
 fn points(values: impl Iterator<Item = f64>) -> Vec<(f64, f64)> {
@@ -188,6 +211,8 @@ mod tests {
 
     fn sample_proc() -> SProc {
         let mut sp = SProc::blank(42, "testproc");
+        sp.cmd = "/usr/bin/testproc --flag value".to_string();
+        sp.user = "alice".to_string();
         for i in 0..30u64 {
             sp.cpu_hist.push_front(i as f64);
             sp.mem_hist.push_front((i * 10) as f64);
@@ -201,6 +226,11 @@ mod tests {
     fn detail_renders_header_and_three_charts() {
         let text = render_to_text(&sample_proc(), 120, 30);
         assert!(text.contains("testproc"), "process name missing");
+        // header details
+        assert!(text.contains("user alice"), "user missing");
+        assert!(text.contains("ppid"), "ppid missing");
+        assert!(text.contains("--flag value"), "cmdline missing");
+        // charts
         assert!(text.contains("CPU %"), "cpu chart title missing");
         assert!(text.contains("Memory"), "memory chart title missing");
         assert!(text.contains("Disk I/O"), "disk chart title missing");
@@ -217,6 +247,11 @@ mod tests {
     #[ignore = "visual preview; run with --ignored --nocapture"]
     fn preview() {
         let mut sp = SProc::blank(4242, "firefox");
+        sp.cmd = "/Applications/Firefox.app/Contents/MacOS/firefox -foreground".to_string();
+        sp.user = "jli".to_string();
+        sp.parent = Some(sysinfo::Pid::from(1usize));
+        sp.threads = 48;
+        sp.run_secs = 11_045;
         for i in 0..40u64 {
             let cpu = 40.0 + 35.0 * ((i as f64) * 0.5).sin();
             sp.cpu_hist.push_front(cpu.max(0.0));

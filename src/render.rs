@@ -20,6 +20,18 @@ where
     result
 }
 
+/// Format a duration in seconds compactly (e.g. "3d4h", "5h2m", "12m").
+pub fn fmt_uptime(secs: u64) -> String {
+    let (d, h, m) = (secs / 86400, (secs % 86400) / 3600, (secs % 3600) / 60);
+    if d > 0 {
+        format!("{d}d{h}h")
+    } else if h > 0 {
+        format!("{h}h{m}m")
+    } else {
+        format!("{m}m")
+    }
+}
+
 /// Format a byte count with a binary unit suffix (e.g. 1536.0 -> "1.5KB").
 pub fn human_bytes(bytes: f64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
@@ -183,6 +195,13 @@ mod tests {
         // clamps out-of-range
         assert_eq!(heat(-1.0), heat(0.0));
         assert_eq!(heat(2.0), heat(1.0));
+    }
+
+    #[test]
+    fn fmt_uptime_formats() {
+        assert_eq!(fmt_uptime(90_061), "1d1h");
+        assert_eq!(fmt_uptime(3_700), "1h1m");
+        assert_eq!(fmt_uptime(120), "2m");
     }
 
     #[test]
