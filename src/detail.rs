@@ -15,6 +15,17 @@ use crate::sproc::SProc;
 /// One series to plot: legend name, line color, and (x, y) points.
 type Series<'a> = (&'a str, Color, &'a [(f64, f64)]);
 
+// Below this height, three stacked charts get too short to read, so we lay
+// them side-by-side instead -- provided the pane is wide enough to split.
+const MIN_STACK_HEIGHT: u16 = 24;
+const MIN_SIDE_BY_SIDE_WIDTH: u16 = 90;
+
+/// Short, wide panes read better with the charts side-by-side (each keeps full
+/// height) than squished into a tall stack.
+fn use_horizontal(area: Rect) -> bool {
+    area.height < MIN_STACK_HEIGHT && area.width >= MIN_SIDE_BY_SIDE_WIDTH
+}
+
 pub fn render_detail(f: &mut Frame, area: Rect, sp: &SProc, secs_per_sample: f64) {
     let rows = Layout::vertical([
         Constraint::Length(1), // header
@@ -24,12 +35,16 @@ pub fn render_detail(f: &mut Frame, area: Rect, sp: &SProc, secs_per_sample: f64
 
     render_header(f, rows[0], sp);
 
-    let charts = Layout::vertical([
+    let thirds = [
         Constraint::Ratio(1, 3),
         Constraint::Ratio(1, 3),
         Constraint::Ratio(1, 3),
-    ])
-    .split(rows[1]);
+    ];
+    let charts = if use_horizontal(area) {
+        Layout::horizontal(thirds).split(rows[1])
+    } else {
+        Layout::vertical(thirds).split(rows[1])
+    };
 
     // history is newest-first; reverse so time flows left (oldest) -> right (now)
     let cpu = points(sp.cpu_hist.iter().rev().copied());
@@ -211,9 +226,12 @@ mod tests {
         }
         sp.cpu_ewma = 52.3;
         sp.mem_mb = 512.0;
-        let mut t = Terminal::new(TestBackend::new(110, 32)).unwrap();
-        t.draw(|f| render_detail(f, f.area(), &sp, 1.0)).unwrap();
-        print!("{}", t.backend());
+        for (w, h, label) in [(110, 32, "tall (vertical)"), (150, 14, "short & wide")] {
+            let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+            t.draw(|f| render_detail(f, f.area(), &sp, 1.0)).unwrap();
+            println!("\n=== {label} {w}x{h} ===");
+            print!("{}", t.backend());
+        }
     }
 
     #[test]
@@ -223,5 +241,20 @@ mod tests {
         let text = render_to_text(&sp, 120, 30);
         assert!(text.contains("fresh"));
         assert!(text.contains("CPU %"));
+    }
+
+    #[test]
+    fn layout_is_horizontal_only_when_short_and_wide() {
+        assert!(use_horizontal(Rect::new(0, 0, 200, 12))); // short & wide
+        assert!(!use_horizontal(Rect::new(0, 0, 200, 40))); // tall enough: stack
+        assert!(!use_horizontal(Rect::new(0, 0, 50, 12))); // too narrow to split
+    }
+
+    #[test]
+    fn short_wide_window_still_shows_all_three_charts() {
+        let text = render_to_text(&sample_proc(), 160, 13);
+        assert!(text.contains("CPU %"));
+        assert!(text.contains("Memory"));
+        assert!(text.contains("Disk I/O"));
     }
 }
