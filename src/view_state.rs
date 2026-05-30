@@ -27,6 +27,8 @@ pub struct ViewState {
     pub filter: String,
     /// True while the user is typing into the filter (keys go to the buffer).
     pub filtering: bool,
+    /// Show processes as a parent->child tree instead of a flat list.
+    pub tree: bool,
     pub should_quit: bool,
     action: Action,
 }
@@ -43,6 +45,7 @@ impl Default for ViewState {
             bar_height: 1,
             filter: String::new(),
             filtering: false,
+            tree: false,
             should_quit: false,
             action: Action::default(),
         }
@@ -58,6 +61,7 @@ impl ViewState {
             (_, KeyCode::Esc) => self.action = Top,
             (&Top, KeyCode::Char('q')) => self.should_quit = true,
             (&Top, KeyCode::Char('i')) => self.hide_idle = !self.hide_idle,
+            (&Top, KeyCode::Char('t')) => self.tree = !self.tree,
             // cycle bar height 1 -> 2 -> 3 -> 1
             (&Top, KeyCode::Char('b')) => self.bar_height = self.bar_height % 3 + 1,
             (&Top, KeyCode::Char(c)) => {
@@ -102,7 +106,7 @@ impl ViewState {
         match &self.action {
             Action::Top => {
                 let mut f = format!(
-                    "(/)filter  {}  (i)dle (b)ars  ↑↓ select  ⏎ details  q quit",
+                    "(/)filter  {}  (i)dle (t)ree (b)ars  ↑↓ select  ⏎ details  q quit",
                     Action::action_help()
                 );
                 if !self.filter.is_empty() {
