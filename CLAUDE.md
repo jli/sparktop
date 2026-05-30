@@ -58,6 +58,18 @@ pre-commit run --all-files     # Run pre-commit hooks (fmt, cargo-check, clippy)
 
 ## Recent Changes
 
+**2026-05-30: Gap-analysis features (vs bottom/btop/htop/zenith)**
+- **Name filter / search** (`/`): `ViewState.filter` + `filtering`; `View::visible`
+  filters by name substring (takes precedence over hide_idle).
+- **System summary header**: `SProcs::summary() -> SysSummary` (global cpu, mem/swap,
+  load avg, uptime, task count); rendered as a heat-shaded one-line header above the
+  list (`view::summary_line` / `fmt_uptime`). `update()` now also `refresh_memory`.
+- **Tree view** (`t`): `View::tree_rows` builds a parent→child DFS order (depth-indented
+  names) from `SProc.parent`; siblings sorted by the active key; cycle-guarded.
+- **Bug fix**: memory was shown ~1000x too small (divided bytes by 1024 as if KB since
+  the sysinfo 0.30 upgrade). Now stored as `mem_bytes` and rendered via `human_bytes`,
+  consistent with the disk columns.
+
 **2026-05-29: Process detail view, navigation, and list features**
 - **Process detail view** (`src/detail.rs`): press `⏎` on a selected process for
   a full-screen drill-down with high-res braille line charts (ratatui `Chart`,

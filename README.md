@@ -17,6 +17,9 @@ sparktop can!
 - [x] sortable, toggleable columns
 - [x] numeric columns heat-shaded (green→red) by value, so high values pop
 - [x] hide idle (low-cpu) processes by default
+- [x] name filter / search (`/`)
+- [x] process tree view (`t`)
+- [x] system summary header (cpu, mem/swap, load, uptime, task count)
 - [x] process **detail view** (`⏎`): full-screen high-res braille charts of a
   process's cpu, memory and disk-i/o history
 
@@ -35,10 +38,12 @@ cargo run -- -d 0.5 -e 0.3 # custom refresh (s) and ewma weight (0..1)
 |----------|----------------------------------------------------|
 | `↑`/`↓`  | move selection                                     |
 | `⏎`      | open detail view for the selected process          |
-| `esc`    | back out of detail / a sub-mode                    |
+| `/`      | filter by process name (type, `⏎` apply, `esc` clear) |
+| `esc`    | back out of detail / clear filter / a sub-mode     |
 | `s`      | choose sort column (repeat a column to reverse)    |
 | `c`      | toggle which columns are shown                     |
 | `i`      | show/hide idle (low-cpu) processes                 |
+| `t`      | toggle process tree view                           |
 | `b`      | cycle bar height (1 → 2 → 3)                        |
 | `q` / `^C` | quit                                             |
 
@@ -49,8 +54,8 @@ The footer always lists the keys for the current mode.
 - display more stable process list
   - group stuff by sort key (perhaps deciles?) and then avoid resorting within each decile, since not that important strict ordering as much as rough neighborhood. use boxes or alternating background color
 - list: toggle full/short process name
-- list: other column options? state, ppid, etc.
-- list: pid tree view
+- list: other column options? user, state, ppid, threads, etc.
+- tree view enhancements (basic tree done):
   - collapsable nodes, which aggregates values
   - key to fold all below certain depth
 - list: regex folding
