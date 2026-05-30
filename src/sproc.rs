@@ -12,6 +12,7 @@ pub struct SProc {
     pub cpu_ewma: f64,
     pub cpu_hist: VecDeque<f64>,
     pub mem_mb: f64,
+    pub mem_hist: VecDeque<f64>,
     // maybe want total bytes over history, and combined read/write?
     pub disk_read_ewma: f64,
     pub disk_read_hist: VecDeque<u64>,
@@ -74,6 +75,7 @@ impl SProc {
         self.disk_read_ewma = ewma(disk_read_bytes as f64, self.disk_read_ewma, ewma_weight);
         self.disk_write_ewma = ewma(disk_write_bytes as f64, self.disk_write_ewma, ewma_weight);
         push_sample(&mut self.cpu_hist, cpu, SAMPLE_LIMIT);
+        push_sample(&mut self.mem_hist, self.mem_mb, SAMPLE_LIMIT);
         push_sample(&mut self.disk_read_hist, disk_read_bytes, SAMPLE_LIMIT);
         push_sample(&mut self.disk_write_hist, disk_write_bytes, SAMPLE_LIMIT);
     }
@@ -89,6 +91,7 @@ impl From<&Process> for SProc {
             // TODO: how does the final into() work?
             cpu_hist: vec![p.cpu_usage().into()].into(),
             mem_mb: (p.memory() as f64) / 1024.,
+            mem_hist: vec![(p.memory() as f64) / 1024.].into(),
             disk_read_ewma: du.read_bytes as f64, // TODO: how come no into()?
             disk_read_hist: vec![du.read_bytes].into(),
             disk_write_ewma: du.written_bytes as f64,
@@ -105,4 +108,53 @@ fn ewma(new_val: f64, prev_ewma: f64, ewma_weight: f64) -> f64 {
 fn push_sample<T>(deq: &mut VecDeque<T>, x: T, limit: usize) {
     deq.push_front(x);
     deq.truncate(limit);
+}
+
+#[cfg(test)]
+impl SProc {
+    /// Test-only constructor: a live process with empty histories.
+    pub fn blank(pid: u32, name: &str) -> Self {
+        Self {
+            pid: Pid::from(pid as usize),
+            name: name.to_string(),
+            cpu_ewma: 0.0,
+            cpu_hist: VecDeque::new(),
+            mem_mb: 0.0,
+            mem_hist: VecDeque::new(),
+            disk_read_ewma: 0.0,
+            disk_read_hist: VecDeque::new(),
+            disk_write_ewma: 0.0,
+            disk_write_hist: VecDeque::new(),
+            tombstone: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn histories_track_newest_first_and_cap_at_limit() {
+        let mut sp = SProc::blank(1, "t");
+        for i in 0..(SAMPLE_LIMIT + 10) {
+            // mem_kb = i*1024 so mem_mb == i, making the expected value obvious
+            sp.add_sample_helper(i as f64, (i as u64) * 1024, i as u64, 0, 1.0);
+        }
+        assert_eq!(sp.cpu_hist.len(), SAMPLE_LIMIT);
+        assert_eq!(sp.mem_hist.len(), SAMPLE_LIMIT);
+        assert_eq!(sp.disk_read_hist.len(), SAMPLE_LIMIT);
+
+        // newest sample is at the front
+        let newest = (SAMPLE_LIMIT + 9) as f64;
+        assert_eq!(sp.cpu_hist.front().copied(), Some(newest));
+        assert_eq!(sp.mem_hist.front().copied(), Some(newest));
+    }
+
+    #[test]
+    fn ewma_blends_old_and_new() {
+        assert_eq!(ewma(10.0, 0.0, 1.0), 10.0); // fully new
+        assert_eq!(ewma(10.0, 4.0, 0.0), 4.0); // fully old
+        assert_eq!(ewma(10.0, 0.0, 0.5), 5.0); // midpoint
+    }
 }
