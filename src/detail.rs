@@ -9,7 +9,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::render::{fmt_uptime, human_bytes};
+use crate::render::{fmt_uptime, human_bytes, state_color, state_label};
 use crate::sproc::SProc;
 
 /// One series to plot: legend name, line color, and (x, y) points.
@@ -93,14 +93,19 @@ fn render_header(f: &mut Frame, area: Rect, sp: &SProc) {
         "-".to_string()
     };
 
+    let state_style = state_color(sp.state).map_or_else(Style::default, |c| Style::default().fg(c));
     let identity = Line::from(vec![
         Span::styled(format!(" {} ", sp.name), name),
         Span::raw(format!(
-            "  pid {}  ppid {}  user {}  state {}  threads {}  up {}",
-            sp.pid,
-            ppid,
-            sp.user,
-            sp.state,
+            "  pid {}  ppid {}  user {}  state ",
+            sp.pid, ppid, sp.user
+        )),
+        Span::styled(
+            format!("{} · {}", sp.state, state_label(sp.state)),
+            state_style,
+        ),
+        Span::raw(format!(
+            "  threads {}  up {}",
             threads,
             fmt_uptime(sp.run_secs)
         )),
@@ -229,6 +234,7 @@ mod tests {
         // header details
         assert!(text.contains("user alice"), "user missing");
         assert!(text.contains("ppid"), "ppid missing");
+        assert!(text.contains("running"), "friendly state label missing");
         assert!(text.contains("--flag value"), "cmdline missing");
         // charts
         assert!(text.contains("CPU %"), "cpu chart title missing");

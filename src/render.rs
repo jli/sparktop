@@ -95,6 +95,35 @@ pub fn heat(t: f64) -> Color {
     )
 }
 
+/// Human-readable description of a single-char process state code.
+pub fn state_label(state: char) -> &'static str {
+    match state {
+        'R' => "running",
+        'S' => "sleeping",
+        'I' => "idle",
+        'D' => "uninterruptible sleep (waiting on I/O)",
+        'T' => "stopped",
+        't' => "traced / debugged",
+        'Z' => "zombie (defunct, waiting to be reaped)",
+        'X' => "dead",
+        'P' => "parked",
+        'W' => "waking",
+        'L' => "blocked on a lock",
+        _ => "unknown",
+    }
+}
+
+/// Accent color for a process state (None = default foreground), shared by the
+/// list's state column and the detail view so they stay consistent.
+pub fn state_color(state: char) -> Option<Color> {
+    match state {
+        'R' => Some(Color::Green),
+        'D' | 'Z' => Some(Color::Red),
+        'X' => Some(Color::DarkGray),
+        _ => None,
+    }
+}
+
 pub fn cpu_color(cpu: f64) -> Option<Color> {
     if cpu >= 400.0 {
         Some(Color::Magenta)
@@ -209,6 +238,14 @@ mod tests {
         assert_eq!(human_bytes(512.0), "512B");
         assert_eq!(human_bytes(1536.0), "1.5KB");
         assert_eq!(human_bytes(5.0 * 1024.0 * 1024.0), "5.0MB");
+    }
+
+    #[test]
+    fn state_label_is_friendly() {
+        assert_eq!(state_label('R'), "running");
+        assert_eq!(state_label('Z'), "zombie (defunct, waiting to be reaped)");
+        assert_eq!(state_label('D'), "uninterruptible sleep (waiting on I/O)");
+        assert_eq!(state_label('?'), "unknown");
     }
 
     #[test]

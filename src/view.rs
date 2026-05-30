@@ -411,12 +411,8 @@ impl ProcTable {
                 Pid => Cell::from(Span::styled(sp.pid.to_string(), liveness_style)),
                 User => Cell::from(Span::styled(sp.user.clone(), liveness_style)),
                 State => {
-                    let style = match sp.state {
-                        'R' => Style::default().fg(Color::Green),
-                        'D' | 'Z' => Style::default().fg(Color::Red),
-                        'X' => Style::default().fg(Color::DarkGray),
-                        _ => Style::default(),
-                    };
+                    let style = render::state_color(sp.state)
+                        .map_or_else(Style::default, |c| Style::default().fg(c));
                     Cell::from(Span::styled(sp.state.to_string(), style))
                 }
                 ProcessName => {
