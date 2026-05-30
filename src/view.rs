@@ -251,11 +251,24 @@ impl View {
         summary: &SysSummary,
         sprocs: &[&SProc],
     ) -> Result<()> {
-        let mut procs = self.visible(sprocs);
+        let visible = self.visible(sprocs);
+        // aggregate mode replaces the rows with summed per-name synthetics;
+        // they're owned here and borrowed for the rest of the draw.
+        let aggregated: Vec<SProc> = if self.state.aggregate {
+            aggregate_by_name(&visible)
+        } else {
+            Vec::new()
+        };
+        let mut procs: Vec<&SProc> = if self.state.aggregate {
+            aggregated.iter().collect()
+        } else {
+            visible
+        };
         let current_pids: HashSet<Pid> = procs.iter().map(|p| p.pid).collect();
         self.note_new_rows(&current_pids);
-        // rows carry a tree depth (0 in flat mode) for name indentation
-        let rows: Vec<(&SProc, u16)> = if self.state.tree {
+        // rows carry a tree depth (0 in flat mode) for name indentation.
+        // aggregate rows have no parents, so they always use the flat path.
+        let rows: Vec<(&SProc, u16)> = if self.state.tree && !self.state.aggregate {
             self.tree_rows(&procs)
         } else {
             self.flat_rows(&mut procs)
@@ -475,6 +488,15 @@ fn core_lines(cores: &[Vec<f64>], width: u16) -> Vec<Line<'static>> {
         .chunks(per_row)
         .map(|chunk| Line::from(chunk.iter().flatten().cloned().collect::<Vec<_>>()))
         .collect()
+}
+
+/// Fold same-named processes into one summed synthetic row each.
+fn aggregate_by_name(procs: &[&SProc]) -> Vec<SProc> {
+    let mut groups: HashMap<&str, Vec<&SProc>> = HashMap::new();
+    for &p in procs {
+        groups.entry(p.name.as_str()).or_default().push(p);
+    }
+    groups.values().map(|g| SProc::aggregate(g)).collect()
 }
 
 /// A numeric cell shaded by where `val` falls in [0, max] (green->red). Dead
@@ -713,6 +735,32 @@ mod tests {
         assert_eq!(indent_name("x", 0), "x");
         assert_eq!(indent_name("x", 1), "↳ x");
         assert_eq!(indent_name("x", 2), "  ↳ x");
+    }
+
+    #[test]
+    fn aggregate_sums_same_named_processes() {
+        let mut a = SProc::blank(10, "chrome");
+        a.cpu_ewma = 5.0;
+        a.mem_bytes = 100.0;
+        a.cpu_hist = [1.0, 2.0].into();
+        let mut b = SProc::blank(3, "chrome");
+        b.cpu_ewma = 7.0;
+        b.mem_bytes = 50.0;
+        b.cpu_hist = [10.0].into();
+        let c = SProc::blank(4, "bash");
+        let agg = aggregate_by_name(&[&a, &b, &c]);
+
+        assert_eq!(agg.len(), 2); // chrome group + bash
+        let chrome = agg.iter().find(|s| s.name.starts_with("chrome")).unwrap();
+        assert_eq!(chrome.name, "chrome (2)");
+        assert_eq!(chrome.cpu_ewma, 12.0);
+        assert_eq!(chrome.mem_bytes, 150.0);
+        assert_eq!(chrome.pid.as_u32(), 3); // group id = lowest pid
+                                            // histories summed element-wise (newest-first): [1,2] + [10] = [11,2]
+        assert_eq!(
+            chrome.cpu_hist.iter().copied().collect::<Vec<_>>(),
+            vec![11.0, 2.0]
+        );
     }
 
     #[test]

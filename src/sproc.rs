@@ -125,6 +125,56 @@ impl SProc {
     }
 }
 
+impl SProc {
+    /// Combine several same-named processes into one synthetic row: metrics and
+    /// histories are summed; the group's id is its lowest pid (stable as long as
+    /// that member lives). `members` must be non-empty.
+    pub fn aggregate(members: &[&SProc]) -> SProc {
+        let rep = members.iter().min_by_key(|m| m.pid.as_u32()).unwrap();
+        let base = members[0].name.clone();
+        let count = members.len();
+        let user = if members.iter().all(|m| m.user == members[0].user) {
+            members[0].user.clone()
+        } else {
+            "*".to_string()
+        };
+        SProc {
+            pid: rep.pid,
+            parent: None,
+            name: format!("{base} ({count})"),
+            cmd: format!("{count} × {base}"),
+            user,
+            state: ' ',
+            threads: members.iter().map(|m| m.threads).sum(),
+            run_secs: members.iter().map(|m| m.run_secs).max().unwrap_or(0),
+            cpu_ewma: members.iter().map(|m| m.cpu_ewma).sum(),
+            cpu_hist: sum_hist(members, |m| &m.cpu_hist),
+            mem_bytes: members.iter().map(|m| m.mem_bytes).sum(),
+            mem_hist: sum_hist(members, |m| &m.mem_hist),
+            disk_read_ewma: members.iter().map(|m| m.disk_read_ewma).sum(),
+            disk_read_hist: sum_hist(members, |m| &m.disk_read_hist),
+            disk_write_ewma: members.iter().map(|m| m.disk_write_ewma).sum(),
+            disk_write_hist: sum_hist(members, |m| &m.disk_write_hist),
+            tombstone: None,
+        }
+    }
+}
+
+/// Element-wise sum of a history field across members (aligned newest-first).
+fn sum_hist<T>(members: &[&SProc], get: impl Fn(&SProc) -> &VecDeque<T>) -> VecDeque<T>
+where
+    T: Copy + Default + std::ops::Add<Output = T>,
+{
+    let len = members.iter().map(|m| get(m).len()).max().unwrap_or(0);
+    (0..len)
+        .map(|i| {
+            members.iter().fold(T::default(), |acc, m| {
+                get(m).get(i).map_or(acc, |&v| acc + v)
+            })
+        })
+        .collect()
+}
+
 fn status_char(s: ProcessStatus) -> char {
     use ProcessStatus::*;
     match s {

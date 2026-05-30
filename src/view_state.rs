@@ -29,6 +29,8 @@ pub struct ViewState {
     pub filtering: bool,
     /// Show processes as a parent->child tree instead of a flat list.
     pub tree: bool,
+    /// Combine same-named processes into one summed row.
+    pub aggregate: bool,
     pub should_quit: bool,
     action: Action,
 }
@@ -46,6 +48,7 @@ impl Default for ViewState {
             filter: String::new(),
             filtering: false,
             tree: false,
+            aggregate: false,
             should_quit: false,
             action: Action::default(),
         }
@@ -62,6 +65,7 @@ impl ViewState {
             (&Top, KeyCode::Char('q')) => self.should_quit = true,
             (&Top, KeyCode::Char('i')) => self.hide_idle = !self.hide_idle,
             (&Top, KeyCode::Char('t')) => self.tree = !self.tree,
+            (&Top, KeyCode::Char('a')) => self.aggregate = !self.aggregate,
             // cycle bar height 1 -> 2 -> 3 -> 1
             (&Top, KeyCode::Char('b')) => self.bar_height = self.bar_height % 3 + 1,
             (&Top, KeyCode::Char(c)) => {
@@ -106,7 +110,7 @@ impl ViewState {
         match &self.action {
             Action::Top => {
                 let mut f = format!(
-                    "(/)filter  {}  (i)dle (t)ree (b)ars  ↑↓ select  ⏎ details  q quit",
+                    "(/)filter  {}  (i)dle (t)ree (a)gg (b)ars  ↑↓ ⏎ details  q quit",
                     Action::action_help()
                 );
                 if !self.filter.is_empty() {
