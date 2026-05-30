@@ -63,6 +63,26 @@ where
     rows
 }
 
+/// Map `t` in [0, 1] to a low->high heat color: green -> yellow -> red.
+/// Used to shade numeric columns so big values stand out at a glance.
+pub fn heat(t: f64) -> Color {
+    const LOW: (u8, u8, u8) = (100, 170, 100); // muted green
+    const MID: (u8, u8, u8) = (225, 205, 75); // yellow
+    const HIGH: (u8, u8, u8) = (235, 75, 65); // red
+    let t = t.clamp(0.0, 1.0);
+    let lerp = |a: u8, b: u8, f: f64| (a as f64 + (b as f64 - a as f64) * f).round() as u8;
+    let (from, to, f) = if t < 0.5 {
+        (LOW, MID, t / 0.5)
+    } else {
+        (MID, HIGH, (t - 0.5) / 0.5)
+    };
+    Color::Rgb(
+        lerp(from.0, to.0, f),
+        lerp(from.1, to.1, f),
+        lerp(from.2, to.2, f),
+    )
+}
+
 pub fn cpu_color(cpu: f64) -> Option<Color> {
     if cpu >= 400.0 {
         Some(Color::Magenta)
@@ -143,6 +163,26 @@ mod tests {
         // a zero sample fills nothing
         let rows = render_vec_colored_multi([0.0].iter(), 100., 3);
         assert!(rows.iter().all(|r| r[0].content.as_ref() == " "));
+    }
+
+    #[test]
+    fn heat_ramps_green_to_red() {
+        // low: green dominates; high: red dominates; mid: warm (low blue)
+        match heat(0.0) {
+            Color::Rgb(r, g, _) => assert!(g > r),
+            c => panic!("expected rgb, got {:?}", c),
+        }
+        match heat(1.0) {
+            Color::Rgb(r, g, _) => assert!(r > g),
+            c => panic!("expected rgb, got {:?}", c),
+        }
+        match heat(0.5) {
+            Color::Rgb(r, g, b) => assert!(r > b && g > b),
+            c => panic!("expected rgb, got {:?}", c),
+        }
+        // clamps out-of-range
+        assert_eq!(heat(-1.0), heat(0.0));
+        assert_eq!(heat(2.0), heat(1.0));
     }
 
     #[test]

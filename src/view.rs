@@ -170,6 +170,19 @@ impl View {
     }
 }
 
+/// A numeric cell shaded by where `val` falls in [0, max] (green->red). Dead
+/// processes and near-zero values ("_") are left unshaded so they recede.
+fn heat_cell(text: String, val: f64, max: f64, sp: &SProc) -> Cell<'static> {
+    if sp.is_dead() || max <= 0.0 || text == "_" {
+        Cell::from(text)
+    } else {
+        Cell::from(Span::styled(
+            text,
+            Style::default().fg(render::heat(val / max)),
+        ))
+    }
+}
+
 struct ProcTable();
 
 impl ProcTable {
@@ -185,7 +198,15 @@ impl ProcTable {
         let header = display_columns.header(&sort_by);
         let vdcols = display_columns.shown();
 
-        let rows = sprocs.iter().map(|sp| {
+        // per-column maxima (over visible procs) so each numeric column can be
+        // shaded relative to its own scale -- big values pop in every column
+        let col_max = |f: fn(&SProc) -> f64| sprocs.iter().map(|&sp| f(sp)).fold(0.0, f64::max);
+        let max_cpu = col_max(|sp| sp.cpu_ewma);
+        let max_mem = col_max(|sp| sp.mem_mb);
+        let max_dr = col_max(|sp| sp.disk_read_ewma);
+        let max_dw = col_max(|sp| sp.disk_write_ewma);
+
+        let rows = sprocs.iter().map(move |&sp| {
             let mut liveness_style = Style::default();
             if sp.is_dead() {
                 liveness_style = liveness_style.fg(Color::Red);
@@ -193,16 +214,20 @@ impl ProcTable {
             let values = vdcols.iter().map(|c| match c.column {
                 Pid => Cell::from(Span::styled(sp.pid.to_string(), liveness_style)),
                 ProcessName => Cell::from(Span::styled(sp.name.clone(), liveness_style)),
-                DiskRead => Cell::from(render_bytes(sp.disk_read_ewma)),
-                DiskWrite => Cell::from(render_bytes(sp.disk_write_ewma)),
-                Mem => Cell::from(render_metric(sp.mem_mb)),
-                Cpu => {
-                    let text = render_metric(sp.cpu_ewma);
-                    match render::cpu_color(sp.cpu_ewma) {
-                        Some(color) => Cell::from(Span::styled(text, Style::default().fg(color))),
-                        None => Cell::from(text),
-                    }
-                }
+                DiskRead => heat_cell(
+                    render_bytes(sp.disk_read_ewma),
+                    sp.disk_read_ewma,
+                    max_dr,
+                    sp,
+                ),
+                DiskWrite => heat_cell(
+                    render_bytes(sp.disk_write_ewma),
+                    sp.disk_write_ewma,
+                    max_dw,
+                    sp,
+                ),
+                Mem => heat_cell(render_metric(sp.mem_mb), sp.mem_mb, max_mem, sp),
+                Cpu => heat_cell(render_metric(sp.cpu_ewma), sp.cpu_ewma, max_cpu, sp),
                 // taller bars get more vertical resolution; one Line per row
                 CpuHistory => {
                     let lines: Vec<Line> =
