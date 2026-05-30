@@ -32,6 +32,11 @@ pub struct View {
     table_state: TableState,
     /// seconds between samples, for labelling the detail-view time axis.
     secs_per_sample: f64,
+    /// Frozen flat-list order, kept stable between re-sorts to stop rows from
+    /// jumping every tick. Re-sorted only when the visible set or sort changes.
+    flat_order: Vec<Pid>,
+    flat_pids: HashSet<Pid>,
+    last_sort: Option<(SortColumn, Dir)>,
 }
 
 impl View {
@@ -45,11 +50,37 @@ impl View {
     fn sort(&self, sprocs: &mut [&SProc]) {
         sprocs.sort_by_key(|&sp| {
             let val = self.state.sort_by.from_sproc(sp);
-            match self.state.sort_dir {
+            let signed = match self.state.sort_dir {
                 Dir::Asc => OrdFloat(val),
                 Dir::Desc => OrdFloat(-val),
-            }
+            };
+            // pid is a stable tiebreak so equal values don't shuffle with the
+            // process HashMap's (nondeterministic) iteration order
+            (signed, sp.pid.as_u32())
         });
+    }
+
+    /// Flat-list rows with frozen ordering: only re-sort when the sort
+    /// column/direction changes or the set of visible pids changes (e.g. a
+    /// process crosses the idle threshold, spawns, or dies). Otherwise keep the
+    /// previous order so rows stay put while their values update in place.
+    fn flat_rows<'a>(&mut self, procs: &mut Vec<&'a SProc>) -> Vec<(&'a SProc, u16)> {
+        let pids: HashSet<Pid> = procs.iter().map(|p| p.pid).collect();
+        let sort_key = (self.state.sort_by, self.state.sort_dir);
+        if self.last_sort != Some(sort_key) || pids != self.flat_pids {
+            self.sort(procs);
+            self.flat_order = procs.iter().map(|p| p.pid).collect();
+            self.flat_pids = pids;
+            self.last_sort = Some(sort_key);
+        } else {
+            let by_pid: HashMap<Pid, &SProc> = procs.iter().map(|&p| (p.pid, p)).collect();
+            *procs = self
+                .flat_order
+                .iter()
+                .filter_map(|pid| by_pid.get(pid).copied())
+                .collect();
+        }
+        procs.iter().map(|&sp| (sp, 0)).collect()
     }
 
     /// The processes to actually display. A name filter (if set) takes
@@ -197,8 +228,7 @@ impl View {
         let rows: Vec<(&SProc, u16)> = if self.state.tree {
             self.tree_rows(&procs)
         } else {
-            self.sort(&mut procs);
-            procs.iter().map(|&sp| (sp, 0)).collect()
+            self.flat_rows(&mut procs)
         };
         self.order = rows.iter().map(|(sp, _)| sp.pid).collect();
         // keep the highlighted row in sync with the selected pid (and let
@@ -585,6 +615,38 @@ mod tests {
         assert_eq!(indent_name("x", 0), "x");
         assert_eq!(indent_name("x", 1), "↳ x");
         assert_eq!(indent_name("x", 2), "  ↳ x");
+    }
+
+    #[test]
+    fn flat_order_freezes_until_membership_or_sort_changes() {
+        let mut a = SProc::blank(1, "a");
+        a.cpu_ewma = 10.0;
+        let mut b = SProc::blank(2, "b");
+        b.cpu_ewma = 5.0;
+        let mut v = View::default(); // Cpu, Desc
+
+        let order =
+            |rows: &[(&SProc, u16)]| rows.iter().map(|(s, _)| s.pid.as_u32()).collect::<Vec<_>>();
+
+        // initial: a(10) above b(5)
+        let rows = v.flat_rows(&mut vec![&a, &b]);
+        assert_eq!(order(&rows), vec![1, 2]);
+
+        // a drops below b but same set+sort -> order stays frozen
+        let mut a_low = SProc::blank(1, "a");
+        a_low.cpu_ewma = 1.0;
+        let rows = v.flat_rows(&mut vec![&b, &a_low]); // input order shouldn't matter
+        assert_eq!(
+            order(&rows),
+            vec![1, 2],
+            "frozen while membership unchanged"
+        );
+
+        // adding a process changes the set -> re-sort by value
+        let mut c = SProc::blank(3, "c");
+        c.cpu_ewma = 8.0;
+        let rows = v.flat_rows(&mut vec![&a_low, &b, &c]);
+        assert_eq!(order(&rows), vec![3, 2, 1], "re-sorts on membership change");
     }
 
     #[test]

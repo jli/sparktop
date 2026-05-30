@@ -408,7 +408,7 @@ const VIEW_SORT_COLUMNS: [ViewSortColumn; 6] = [
     },
 ];
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub enum Dir {
     Asc,
     #[default]
