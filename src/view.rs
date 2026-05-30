@@ -41,10 +41,19 @@ pub struct View {
     seen: HashSet<Pid>,
     /// ticks remaining to highlight a freshly-appeared row.
     flash: HashMap<Pid, u8>,
+    /// grace ticks remaining for a process that was recently active but has
+    /// dipped below the idle threshold; keeps it from flickering out of the
+    /// list the moment its smoothed CPU drops.
+    keep_alive: HashMap<Pid, u8>,
 }
 
 /// How many draws a newly-appeared row stays highlighted as it fades out.
 const FLASH_TICKS: u8 = 6;
+
+/// Once a process has been active, keep showing it for at least this many ticks
+/// after it falls below the idle threshold. Hysteresis that stops the "appears
+/// then vanishes next tick" flicker for processes hovering around the threshold.
+const KEEP_ALIVE_TICKS: u8 = 6;
 
 impl View {
     pub fn new(secs_per_sample: f64) -> Self {
@@ -90,6 +99,29 @@ impl View {
         procs.iter().map(|&sp| (sp, String::new())).collect()
     }
 
+    /// A process counts as "active" if it's currently at/above the idle
+    /// threshold, or still inside its post-activity grace window.
+    fn is_active(&self, sp: &SProc) -> bool {
+        sp.cpu_ewma >= IDLE_CPU_PCT || self.keep_alive.contains_key(&sp.pid)
+    }
+
+    /// Advance the grace window: any process at/above the idle threshold resets
+    /// its window to KEEP_ALIVE_TICKS; everything else ages by one and is dropped
+    /// once it expires (or the process is gone). Call once per draw, before
+    /// `visible`, so a briefly-busy process lingers instead of flickering out.
+    fn update_keep_alive(&mut self, sprocs: &[&SProc]) {
+        for &sp in sprocs {
+            if sp.cpu_ewma >= IDLE_CPU_PCT {
+                self.keep_alive.insert(sp.pid, KEEP_ALIVE_TICKS);
+            }
+        }
+        let present: HashSet<Pid> = sprocs.iter().map(|p| p.pid).collect();
+        self.keep_alive.retain(|pid, n| {
+            *n = n.saturating_sub(1);
+            *n > 0 && present.contains(pid)
+        });
+    }
+
     /// The processes to actually display.
     /// - a name filter (if set) takes precedence and shows every match;
     /// - tree mode with hide_idle prunes to active branches plus their full
@@ -115,9 +147,7 @@ impl View {
             .iter()
             .copied()
             .filter(|sp| {
-                !self.state.hide_idle
-                    || sp.cpu_ewma >= IDLE_CPU_PCT
-                    || self.state.selected == Some(sp.pid)
+                !self.state.hide_idle || self.is_active(sp) || self.state.selected == Some(sp.pid)
             })
             .collect()
     }
@@ -128,7 +158,7 @@ impl View {
         let by_pid: HashMap<Pid, &SProc> = sprocs.iter().map(|&p| (p.pid, p)).collect();
         let mut keep: HashSet<Pid> = HashSet::new();
         for &p in sprocs {
-            if p.cpu_ewma < IDLE_CPU_PCT && self.state.selected != Some(p.pid) {
+            if !self.is_active(p) && self.state.selected != Some(p.pid) {
                 continue;
             }
             // walk up from this active node, stopping once we reach a node (and
@@ -175,12 +205,24 @@ impl View {
         for &p in procs {
             subtree_total(p.pid, &own, &children, &mut totals, &mut HashSet::new());
         }
+        // The output is mirror-reversed at the end (leaves on top, roots at the
+        // bottom), so order siblings here in the *opposite* of how they should
+        // read. The key is (is_internal, by_total):
+        //   * is_internal sorts leaf children before subtree children top-down,
+        //     so after the flip each parent's leaf children are grouped directly
+        //     above it and its subtrees stack higher. This keeps a parent tight
+        //     against its own children and stops a lone leaf from being wedged
+        //     between another sibling's subtree rows (the "split branch" look).
+        //   * by_total then ranks by subtree total, flipped so the busiest
+        //     branch ends up toward the top after the reversal.
+        let internal: HashSet<Pid> = children.keys().copied().collect();
         let rank = |sp: &SProc| {
             let t = totals.get(&sp.pid).copied().unwrap_or(0.0);
-            match self.state.sort_dir {
-                Dir::Asc => OrdFloat(t),
-                Dir::Desc => OrdFloat(-t),
-            }
+            let by_total = match self.state.sort_dir {
+                Dir::Asc => OrdFloat(-t),
+                Dir::Desc => OrdFloat(t),
+            };
+            (internal.contains(&sp.pid), by_total)
         };
         roots.sort_by_key(|&sp| rank(sp));
         for kids in children.values_mut() {
@@ -191,6 +233,13 @@ impl View {
         let mut visited = HashSet::new();
         for &root in &roots {
             push_subtree(root, "", true, true, &children, &mut visited, &mut out);
+        }
+        // Flip the whole thing upside-down: leaves on top, roots at the bottom.
+        // The DFS built connectors for a top-down tree, so flip each bottom
+        // corner (╰) to a top corner (╭); ├ and │ are vertically symmetric.
+        out.reverse();
+        for (_, prefix) in &mut out {
+            *prefix = prefix.replace('╰', "╭");
         }
         out
     }
@@ -286,6 +335,8 @@ impl View {
         summary: &SysSummary,
         sprocs: &[&SProc],
     ) -> Result<()> {
+        // advance the post-activity grace window before deciding what's visible
+        self.update_keep_alive(sprocs);
         let visible = self.visible(sprocs);
         // aggregate mode replaces the rows with summed per-name synthetics;
         // they're owned here and borrowed for the rest of the draw.
@@ -329,6 +380,7 @@ impl View {
         let summary_line = summary_line(summary);
         let cores = &summary.cores;
         let flash = &self.flash;
+        let selected = self.state.selected;
         let table_state = &mut self.table_state;
         terminal.draw(|f| {
             let full = f.area();
@@ -381,7 +433,7 @@ impl View {
                     &constraints,
                     bar_height,
                     hist_w,
-                    flash,
+                    &Highlights { flash, selected },
                 );
                 f.render_stateful_widget(proc_table, main, table_state);
             }
@@ -568,13 +620,31 @@ fn core_lines(cores: &[Vec<f64>], width: u16) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// Fold same-named processes into one summed synthetic row each.
+/// Canonical group name for "aggregate by name": collapses helper/role
+/// processes onto their parent app, so e.g. "Google Chrome", "Google Chrome
+/// Helper" and "Google Chrome Helper (Renderer)" all fold into "Google Chrome".
+fn aggregate_key(name: &str) -> &str {
+    let mut key = name;
+    // drop a trailing role parenthetical, e.g. " (Renderer)", " (GPU)"
+    if key.ends_with(')') {
+        if let Some(open) = key.rfind(" (") {
+            key = &key[..open];
+        }
+    }
+    // drop a trailing " Helper" (Chrome/Electron-style child processes)
+    key.strip_suffix(" Helper").unwrap_or(key)
+}
+
+/// Fold processes sharing an aggregation key into one summed synthetic row each.
 fn aggregate_by_name(procs: &[&SProc]) -> Vec<SProc> {
     let mut groups: HashMap<&str, Vec<&SProc>> = HashMap::new();
     for &p in procs {
-        groups.entry(p.name.as_str()).or_default().push(p);
+        groups.entry(aggregate_key(&p.name)).or_default().push(p);
     }
-    groups.values().map(|g| SProc::aggregate(g)).collect()
+    groups
+        .into_iter()
+        .map(|(name, g)| SProc::aggregate(name, &g))
+        .collect()
 }
 
 /// A numeric cell shaded by where `val` falls in [0, max] (green->red). Dead
@@ -590,6 +660,13 @@ fn heat_cell(text: String, val: f64, max: f64, sp: &SProc) -> Cell<'static> {
     }
 }
 
+/// Per-row name-cell highlighting: the amber new-row flash and the selection
+/// reverse-video both apply to just the process name (not the tree indent).
+struct Highlights<'a> {
+    flash: &'a HashMap<Pid, u8>,
+    selected: Option<Pid>,
+}
+
 struct ProcTable();
 
 impl ProcTable {
@@ -600,7 +677,7 @@ impl ProcTable {
         constraints: &'a [Constraint],
         bar_height: u16,
         hist_w: usize,
-        flash: &HashMap<Pid, u8>,
+        hl: &Highlights,
     ) -> Table<'a> {
         use DisplayColumn::*;
 
@@ -622,6 +699,15 @@ impl ProcTable {
             if sp.is_dead() {
                 liveness_style = liveness_style.fg(Color::Red);
             }
+            // freshly-appeared rows get an amber wash on just the name (below),
+            // fading to black over their remaining ticks, so newer arrivals are
+            // brighter than older ones.
+            let flash_bg = hl.flash.get(&sp.pid).map(|&ticks| {
+                let t = ticks as f32 / FLASH_TICKS as f32;
+                let amber = |v: f32| (v * t).round() as u8;
+                Color::Rgb(amber(110.0), amber(90.0), amber(30.0))
+            });
+            let is_selected = hl.selected == Some(sp.pid);
             let values = vdcols.iter().map(|c| match c.column {
                 Pid => Cell::from(Span::styled(sp.pid.to_string(), liveness_style)),
                 User => Cell::from(Span::styled(sp.user.clone(), liveness_style)),
@@ -631,7 +717,9 @@ impl ProcTable {
                     Cell::from(Span::styled(sp.state.to_string(), style))
                 }
                 ProcessName => {
-                    // dim tree-indent prefix, then the name
+                    // dim tree-indent prefix (never highlighted), then the name.
+                    // the flash wash and selection reverse-video apply only to
+                    // the name span so the indent guides stay readable.
                     let mut spans = Vec::new();
                     if !prefix.is_empty() {
                         spans.push(Span::styled(
@@ -639,7 +727,14 @@ impl ProcTable {
                             Style::default().fg(Color::DarkGray),
                         ));
                     }
-                    spans.push(Span::styled(sp.name.clone(), liveness_style));
+                    let mut name_style = liveness_style;
+                    if let Some(bg) = flash_bg {
+                        name_style = name_style.bg(bg);
+                    }
+                    if is_selected {
+                        name_style = name_style.add_modifier(Modifier::REVERSED);
+                    }
+                    spans.push(Span::styled(sp.name.clone(), name_style));
                     Cell::from(Line::from(spans))
                 }
                 Disk => {
@@ -673,24 +768,13 @@ impl ProcTable {
                     Cell::from(Text::from(lines))
                 }
             });
-            let mut row = Row::new(values).height(bar_height);
-            if let Some(&ticks) = flash.get(&sp.pid) {
-                // freshly-appeared row: amber wash that fades to black over its
-                // remaining ticks, so newer arrivals are brighter than older
-                let t = ticks as f32 / FLASH_TICKS as f32;
-                let amber = |v: f32| (v * t).round() as u8;
-                row = row.style(Style::default().bg(Color::Rgb(
-                    amber(110.0),
-                    amber(90.0),
-                    amber(30.0),
-                )));
-            }
-            row
+            Row::new(values).height(bar_height)
         });
 
+        // Selection highlighting is applied to the name span (above), not the
+        // whole row; TableState still drives auto-scroll to keep it visible.
         Table::new(rows, constraints.iter().copied())
             .header(Row::new(header).style(Style::default().add_modifier(Modifier::UNDERLINED)))
-            .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
     }
 }
 
@@ -702,6 +786,39 @@ mod tests {
         let mut sp = SProc::blank(pid, "p");
         sp.cpu_ewma = cpu;
         sp
+    }
+
+    // visual aid: cargo test --lib -- --ignored --nocapture tree_preview
+    #[test]
+    #[ignore]
+    fn tree_preview() {
+        // launchd
+        //  ├ loginwindow ─ WindowServer(busy)
+        //  ├ kernel_task(busy)
+        //  └ bash ─ cargo ─ {rustc(busy), rustc(busy)}
+        let mk = |pid: u32, name: &str, parent: Option<u32>, cpu: f64| {
+            let mut sp = SProc::blank(pid, name);
+            sp.parent = parent.map(|p| Pid::from(p as usize));
+            sp.cpu_ewma = cpu;
+            sp
+        };
+        let procs = vec![
+            mk(1, "launchd", None, 0.0),
+            mk(2, "loginwindow", Some(1), 0.0),
+            mk(3, "WindowServer", Some(2), 40.0),
+            mk(4, "kernel_task", Some(1), 70.0),
+            mk(5, "bash", Some(1), 0.0),
+            mk(6, "cargo", Some(5), 0.0),
+            mk(7, "rustc", Some(6), 95.0),
+            mk(8, "rustc", Some(6), 90.0),
+        ];
+        let refs: Vec<&SProc> = procs.iter().collect();
+        let rows = View::default().tree_rows(&refs);
+        println!("\n--- reversed tree (leaves top, roots bottom) ---");
+        for (sp, prefix) in &rows {
+            println!("{prefix}{}  ({:.0}%)", sp.name, sp.cpu_ewma);
+        }
+        println!();
     }
 
     fn key(c: char) -> KeyEvent {
@@ -819,8 +936,10 @@ mod tests {
         assert_eq!(indent(4), 0, "standalone root");
         assert_eq!(indent(5), 0, "orphan becomes root");
 
+        // reversed layout: leaves on top, roots at the bottom, so a child comes
+        // *before* its parent
         let pos = |pid: u32| rows.iter().position(|r| r.0.pid.as_u32() == pid).unwrap();
-        assert!(pos(1) < pos(2) && pos(2) < pos(3)); // children follow their parent
+        assert!(pos(3) < pos(2) && pos(2) < pos(1)); // deepest first, root last
     }
 
     #[test]
@@ -837,10 +956,76 @@ mod tests {
         b.cpu_ewma = 50.0;
         let all = vec![&a, &child, &b];
 
-        // default sort is Cpu, Desc
+        // default sort is Cpu, Desc. Leaves sit on top, roots at the bottom, but
+        // the *busiest* branch still ranks to the top: A's subtree (101)
+        // outranks B (50), so A's busy child is at the very top, A right below
+        // it, then B at the bottom.
         let rows = View::default().tree_rows(&all);
         let pids: Vec<u32> = rows.iter().map(|r| r.0.pid.as_u32()).collect();
-        assert_eq!(pids, vec![1, 2, 3]); // A, child-of-A, then B
+        assert_eq!(pids, vec![2, 1, 3]); // child-of-A (top), A, then B at bottom
+    }
+
+    #[test]
+    fn tree_reversed_keeps_busiest_on_top_with_leaves_above_parents() {
+        // root1(idle) has two leaves: leafA(busy 90), leafB(10).
+        // root2(50) stands alone. Subtree totals: root1=100, root2=50.
+        let root1 = SProc::blank(1, "root1");
+        let mut leaf_a = SProc::blank(2, "leafA");
+        leaf_a.cpu_ewma = 90.0;
+        leaf_a.parent = Some(Pid::from(1usize));
+        let mut leaf_b = SProc::blank(3, "leafB");
+        leaf_b.cpu_ewma = 10.0;
+        leaf_b.parent = Some(Pid::from(1usize));
+        let mut root2 = SProc::blank(4, "root2");
+        root2.cpu_ewma = 50.0;
+        let all = vec![&root1, &leaf_a, &leaf_b, &root2];
+
+        let rows = View::default().tree_rows(&all); // Cpu, Desc
+        let pids: Vec<u32> = rows.iter().map(|r| r.0.pid.as_u32()).collect();
+        // top -> bottom: busiest leaf, then its sibling, then their parent, then
+        // the lower-ranked standalone root at the very bottom.
+        assert_eq!(pids, vec![2, 3, 1, 4]);
+
+        // a child is always drawn above its parent
+        let pos = |pid: u32| rows.iter().position(|r| r.0.pid.as_u32() == pid).unwrap();
+        assert!(
+            pos(2) < pos(1) && pos(3) < pos(1),
+            "leaves above their parent"
+        );
+
+        // connectors point upward (top corners ╭, never bottom corners ╰)
+        let prefixes: String = rows.iter().map(|r| r.1.as_str()).collect();
+        assert!(prefixes.contains('╭'), "uses upward top-corner glyph");
+        assert!(!prefixes.contains('╰'), "no leftover bottom-corner glyph");
+    }
+
+    #[test]
+    fn tree_reversed_groups_leaf_children_against_parent() {
+        // root R has a leaf child L and a subtree child M(->grandchild G). The
+        // leaf must sit directly against R, and M's subtree must stay contiguous
+        // — L must never wedge between M and G ("branch split by another").
+        let r = SProc::blank(1, "R");
+        let mut l = SProc::blank(2, "L");
+        l.parent = Some(Pid::from(1usize));
+        let mut m = SProc::blank(3, "M");
+        m.parent = Some(Pid::from(1usize));
+        let mut g = SProc::blank(4, "G");
+        g.parent = Some(Pid::from(3usize));
+        let all = vec![&r, &l, &m, &g];
+
+        let rows = View::default().tree_rows(&all);
+        let pos = |pid: u32| rows.iter().position(|r| r.0.pid.as_u32() == pid).unwrap();
+
+        // root at the very bottom; its leaf child directly above it
+        assert_eq!(pos(1), rows.len() - 1, "root at bottom");
+        assert_eq!(pos(2) + 1, pos(1), "leaf child sits directly against root");
+        // the subtree child and its grandchild stay adjacent (branch intact),
+        // with the leaf not interleaved between them
+        assert_eq!(pos(4) + 1, pos(3), "grandchild directly above its parent");
+        assert!(
+            pos(3) < pos(2),
+            "intact subtree stacks above the leaf group"
+        );
     }
 
     #[test]
@@ -867,6 +1052,41 @@ mod tests {
             chrome.cpu_hist.iter().copied().collect::<Vec<_>>(),
             vec![11.0, 2.0]
         );
+    }
+
+    #[test]
+    fn aggregate_key_collapses_helper_and_role_suffixes() {
+        assert_eq!(aggregate_key("Google Chrome"), "Google Chrome");
+        assert_eq!(aggregate_key("Google Chrome Helper"), "Google Chrome");
+        assert_eq!(
+            aggregate_key("Google Chrome Helper (Renderer)"),
+            "Google Chrome"
+        );
+        assert_eq!(aggregate_key("Google Chrome Helper (GPU)"), "Google Chrome");
+        // unrelated names are untouched
+        assert_eq!(aggregate_key("bash"), "bash");
+    }
+
+    #[test]
+    fn aggregate_groups_chrome_family_under_one_row() {
+        let mut main = SProc::blank(1, "Google Chrome");
+        main.cpu_ewma = 3.0;
+        let mut helper = SProc::blank(2, "Google Chrome Helper");
+        helper.cpu_ewma = 5.0;
+        let mut renderer = SProc::blank(3, "Google Chrome Helper (Renderer)");
+        renderer.cpu_ewma = 11.0;
+        let gpu = SProc::blank(4, "Google Chrome Helper (GPU)");
+        let bash = SProc::blank(5, "bash");
+        let agg = aggregate_by_name(&[&main, &helper, &renderer, &gpu, &bash]);
+
+        assert_eq!(agg.len(), 2); // whole chrome family + bash
+        let chrome = agg
+            .iter()
+            .find(|s| s.name.starts_with("Google Chrome"))
+            .unwrap();
+        assert_eq!(chrome.name, "Google Chrome (4)");
+        assert_eq!(chrome.cpu_ewma, 19.0); // 3 + 5 + 11 + 0
+        assert_eq!(chrome.pid.as_u32(), 1); // lowest pid (the main process)
     }
 
     #[test]
@@ -948,6 +1168,53 @@ mod tests {
         // toggling hide_idle off shows everything
         view.state.hide_idle = false;
         assert_eq!(view.visible(&all).len(), 3);
+    }
+
+    #[test]
+    fn recently_active_process_lingers_before_hiding() {
+        let mut v = View::default(); // hide_idle on by default
+        let busy = proc_with_cpu(1, 50.0);
+        let idle = proc_with_cpu(2, 0.0);
+
+        // while active it's shown; the always-idle one is hidden
+        v.update_keep_alive(&[&busy, &idle]);
+        let vis = v.visible(&[&busy, &idle]);
+        assert!(vis.iter().any(|s| s.pid == busy.pid));
+        assert!(!vis.iter().any(|s| s.pid == idle.pid));
+
+        // it dips to idle -> must linger, not vanish on the very next tick
+        let now_idle = proc_with_cpu(1, 0.0);
+        v.update_keep_alive(&[&now_idle, &idle]);
+        assert!(
+            v.visible(&[&now_idle, &idle])
+                .iter()
+                .any(|s| s.pid == now_idle.pid),
+            "recently-active process lingers instead of disappearing next tick"
+        );
+
+        // ...and never flickers back out while it keeps getting brief spikes
+        for _ in 0..KEEP_ALIVE_TICKS * 2 {
+            let spike = proc_with_cpu(1, 50.0);
+            v.update_keep_alive(&[&spike, &idle]);
+            v.update_keep_alive(&[&now_idle, &idle]); // idle tick in between
+            assert!(
+                v.visible(&[&now_idle, &idle])
+                    .iter()
+                    .any(|s| s.pid == now_idle.pid),
+                "a process spiking within the grace window stays put"
+            );
+        }
+
+        // once it stays idle past the grace window it finally drops out
+        for _ in 0..KEEP_ALIVE_TICKS {
+            v.update_keep_alive(&[&now_idle, &idle]);
+        }
+        assert!(
+            !v.visible(&[&now_idle, &idle])
+                .iter()
+                .any(|s| s.pid == now_idle.pid),
+            "hidden once the grace window expires"
+        );
     }
 
     #[test]

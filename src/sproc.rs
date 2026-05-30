@@ -126,12 +126,13 @@ impl SProc {
 }
 
 impl SProc {
-    /// Combine several same-named processes into one synthetic row: metrics and
-    /// histories are summed; the group's id is its lowest pid (stable as long as
-    /// that member lives). `members` must be non-empty.
-    pub fn aggregate(members: &[&SProc]) -> SProc {
+    /// Combine several processes that share an aggregation group into one
+    /// synthetic row: metrics and histories are summed; the group's id is its
+    /// lowest pid (stable as long as that member lives). `name` is the canonical
+    /// group name (e.g. "Google Chrome"). `members` must be non-empty.
+    pub fn aggregate(name: &str, members: &[&SProc]) -> SProc {
         let rep = members.iter().min_by_key(|m| m.pid.as_u32()).unwrap();
-        let base = members[0].name.clone();
+        let base = name;
         let count = members.len();
         let user = if members.iter().all(|m| m.user == members[0].user) {
             members[0].user.clone()

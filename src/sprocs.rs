@@ -1,7 +1,7 @@
 /// SProcs: a collection of all processes on the system.
 use std::collections::{hash_map::Values, HashMap, VecDeque};
 
-use sysinfo::{Pid, System, Users};
+use sysinfo::{CpuRefreshKind, Pid, ProcessRefreshKind, System, UpdateKind, Users};
 
 use crate::sproc::{DeadStatus, SProc};
 
@@ -47,7 +47,12 @@ impl SProcs {
         // before processes for refresh_processes to include cpu usage. This
         // isn't totally crazy, modern cpu power save features can scale things
         // and bust readings.
-        self.sys.refresh_cpu();
+        //
+        // Only refresh cpu *usage* (not per-core frequency, which the default
+        // refresh_cpu() also fetches via a sysctl per core every tick) — we
+        // never display frequency.
+        self.sys
+            .refresh_cpu_specifics(CpuRefreshKind::new().with_cpu_usage());
         self.sys.refresh_memory();
 
         // record per-core usage history for the header sparklines
@@ -60,7 +65,19 @@ impl SProcs {
             hist.truncate(CORE_HIST_LEN);
         }
 
-        self.sys.refresh_processes();
+        // Refresh exactly the per-process fields we display. The default
+        // refresh_processes() fetches `exe` (unused) but *not* `user`/`cmd`
+        // (which we do use), so new processes would otherwise show a missing
+        // user and a name-only cmdline. user/cmd are immutable, so OnlyIfNotSet
+        // fetches them once per process rather than every tick.
+        self.sys.refresh_processes_specifics(
+            ProcessRefreshKind::new()
+                .with_cpu()
+                .with_memory()
+                .with_disk_usage()
+                .with_user(UpdateKind::OnlyIfNotSet)
+                .with_cmd(UpdateKind::OnlyIfNotSet),
+        );
         let users = &self.users;
         let latest_procs = self.sys.processes();
         for (&pid, proc) in latest_procs {

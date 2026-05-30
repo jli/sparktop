@@ -58,6 +58,47 @@ pre-commit run --all-files     # Run pre-commit hooks (fmt, cargo-check, clippy)
 
 ## Recent Changes
 
+**2026-05-30: CPU profiling pass + reversed tree + scoped flash**
+- **Disabled sysinfo's `multithread` (rayon) feature** (`default-features = false`
+  in Cargo.toml). Profiling showed steady-state CPU was dominated not by the
+  refresh work itself (~2.6 ms) but by rayon's 8 worker threads waking and
+  spin-waiting every tick. Serial refresh has higher per-call wall time (~6.8 ms,
+  harmless once a second) but ~60% lower *total* CPU (~2.2% → ~0.9% at 1 Hz) and
+  runs single-threaded. Measure via cumulative cputime over a window, not `ps`
+  %CPU (which spikes at the tick).
+- **Trimmed per-tick refresh kinds** in `SProcs::update`: `refresh_cpu_specifics`
+  with `CpuRefreshKind::new().with_cpu_usage()` (skip per-core frequency, unused);
+  `refresh_processes_specifics` with exactly cpu/memory/disk_usage + user/cmd
+  (`OnlyIfNotSet`). The default `refresh_processes()` fetched `exe` (unused) but
+  *not* user/cmd, so processes appearing after startup were missing their owner
+  and full cmdline — this fixes that latent bug too.
+- **Reversed tree view**: `tree_rows` mirror-reverses its DFS output so leaves sit
+  at the top and roots at the bottom; the bottom-corner glyph `╰` is flipped to
+  `╭` so connectors read correctly upside-down (`├`/`│` are vertically symmetric).
+  Sibling ordering key is `(is_internal, by_total)`: leaf children are grouped
+  directly against their parent and subtrees stack above (stops a lone leaf from
+  wedging between a sibling subtree's rows — the "split branch" look), and
+  `by_total` is flipped so the busiest branch lands near the top after reversal.
+  Caveat: vertical mirroring inverts how indentation reads, so the boundary
+  between two stacked sibling *subtrees* still shows one shallow→deep step
+  (inherent; can't be removed without abandoning the reversed layout).
+- **Highlights scoped to the name span**: both the amber new-row flash and the
+  selection reverse-video apply only to the process name `Span` (not the dim tree
+  indent, not the whole row). Dropped `Table::row_highlight_style`; `TableState`
+  still drives auto-scroll. `ProcTable::build` takes a `Highlights { flash,
+  selected }` bundle (keeps the arg count under clippy's threshold).
+- **Aggregation groups process families**: `aggregate_key` collapses a trailing
+  role parenthetical (" (Renderer)", " (GPU)") and a trailing " Helper" so the
+  whole Chrome/Electron family folds into one row (e.g. "Google Chrome (12)").
+  `SProc::aggregate(name, members)` now takes the canonical group name.
+- **Anti-flicker grace window for hide-idle**: `View.keep_alive: HashMap<Pid,u8>`
+  (reset to `KEEP_ALIVE_TICKS` whenever a proc is at/above `IDLE_CPU_PCT`, aged
+  each draw via `update_keep_alive`). `is_active` = above threshold *or* still in
+  the grace window, used by both the flat `visible` filter and tree
+  `active_branches`. Stops processes that briefly cross the threshold from
+  appearing then vanishing the next tick, and cuts visible-set churn (so
+  `flat_rows` re-sorts less, steadier order).
+
 **2026-05-30: readability pass — stable order, flash, aggregate, core history**
 - **Stable list order**: `View::flat_rows` freezes the order and only re-sorts on
   sort change or visible-set change; sort gained a pid tiebreak (kills HashMap
