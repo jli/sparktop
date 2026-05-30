@@ -36,7 +36,14 @@ impl ViewState {
             }
             (&SelectSort, KeyCode::Char(c)) => {
                 if let Some(col) = Action::sort_col_from_char(c) {
-                    self.sort_by = col;
+                    // re-selecting the active column flips direction, like
+                    // clicking a column header twice
+                    if self.sort_by == col {
+                        self.sort_dir.flip();
+                    } else {
+                        self.sort_by = col;
+                        self.sort_dir = Dir::Desc;
+                    }
                     self.action = Top;
                 }
             }
@@ -60,7 +67,7 @@ impl ViewState {
         }
         match &self.action {
             Action::Top => format!("{}  ↑↓ select  ⏎ details  q quit", Action::action_help()),
-            Action::SelectSort => Action::sort_col_help(),
+            Action::SelectSort => format!("{}  (repeat to reverse)", Action::sort_col_help()),
             Action::ToggleColumn => Action::display_col_help(),
         }
     }
@@ -169,14 +176,14 @@ const VIEW_DISPLAY_COLUMNS: [ViewDisplayColumn; 7] = [
         key: 'r',
         help: "disk-(r)ead",
         header: "dr",
-        constraint: Constraint::Length(5),
+        constraint: Constraint::Length(7),
     },
     ViewDisplayColumn {
         column: DisplayColumn::DiskWrite,
         key: 'w',
         help: "disk-(w)rite",
         header: "dw",
-        constraint: Constraint::Length(5),
+        constraint: Constraint::Length(7),
     },
     ViewDisplayColumn {
         column: DisplayColumn::Mem,
@@ -247,6 +254,15 @@ pub fn render_metric(m: f64) -> String {
         String::from("_")
     } else {
         format!("{:.1}", m)
+    }
+}
+
+// hide near-zero, otherwise human-readable byte counts (e.g. "1.5KB")
+pub fn render_bytes(b: f64) -> String {
+    if b < 1.0 {
+        String::from("_")
+    } else {
+        crate::render::human_bytes(b)
     }
 }
 
@@ -343,5 +359,50 @@ impl Dir {
             Asc => *self = Desc,
             Desc => *self = Asc,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn reselecting_sort_column_flips_direction() {
+        let mut vs = ViewState::default();
+        assert!(matches!(vs.sort_dir, Dir::Desc)); // default
+
+        // switch to a new column: stays Desc
+        vs.handle_key(key('s'));
+        vs.handle_key(key('m'));
+        assert!(matches!(vs.sort_by, SortColumn::Mem));
+        assert!(matches!(vs.sort_dir, Dir::Desc));
+
+        // re-select the same column: flips to Asc
+        vs.handle_key(key('s'));
+        vs.handle_key(key('m'));
+        assert!(matches!(vs.sort_dir, Dir::Asc));
+    }
+
+    #[test]
+    fn toggling_a_column_removes_then_restores_it() {
+        let mut vs = ViewState::default();
+        let before = vs.displayed_columns.shown().len();
+        vs.handle_key(key('c')); // column mode
+        vs.handle_key(key('p')); // toggle pid off
+        assert_eq!(vs.displayed_columns.shown().len(), before - 1);
+        vs.handle_key(key('c'));
+        vs.handle_key(key('p')); // back on
+        assert_eq!(vs.displayed_columns.shown().len(), before);
+    }
+
+    #[test]
+    fn render_bytes_hides_zero_and_scales() {
+        assert_eq!(render_bytes(0.0), "_");
+        assert_eq!(render_bytes(2048.0), "2.0KB");
     }
 }

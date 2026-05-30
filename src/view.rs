@@ -14,7 +14,9 @@ use sysinfo::Pid;
 use crate::{
     detail, render,
     sproc::SProc,
-    view_state::{render_metric, Dir, DisplayColumn, DisplayedColumns, SortColumn, ViewState},
+    view_state::{
+        render_bytes, render_metric, Dir, DisplayColumn, DisplayedColumns, SortColumn, ViewState,
+    },
 };
 
 #[derive(Default)]
@@ -172,8 +174,8 @@ impl ProcTable {
             let values = vdcols.iter().map(|c| match c.column {
                 Pid => Line::from(Span::styled(sp.pid.to_string(), liveness_style)),
                 ProcessName => Line::from(Span::styled(sp.name.clone(), liveness_style)),
-                DiskRead => Line::from(render_metric(sp.disk_read_ewma)),
-                DiskWrite => Line::from(render_metric(sp.disk_write_ewma)),
+                DiskRead => Line::from(render_bytes(sp.disk_read_ewma)),
+                DiskWrite => Line::from(render_bytes(sp.disk_write_ewma)),
                 Mem => Line::from(render_metric(sp.mem_mb)),
                 Cpu => {
                     let text = render_metric(sp.cpu_ewma);
