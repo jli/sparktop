@@ -76,8 +76,10 @@ impl View {
     }
 
     /// Arrange the visible procs as a parent->child tree in DFS order,
-    /// returning (proc, depth). Roots and each sibling group are ordered by the
-    /// active sort key. A process whose parent isn't in the set becomes a root.
+    /// returning (proc, depth). Branches are ordered by their *subtree total* of
+    /// the active sort metric (so a quiet parent with a busy child still floats
+    /// up), while each row still displays the process's own value. A process
+    /// whose parent isn't in the set becomes a root.
     fn tree_rows<'a>(&self, procs: &[&'a SProc]) -> Vec<(&'a SProc, u16)> {
         let present: HashSet<Pid> = procs.iter().map(|p| p.pid).collect();
         let mut children: HashMap<Pid, Vec<&'a SProc>> = HashMap::new();
@@ -90,10 +92,28 @@ impl View {
                 _ => roots.push(p),
             }
         }
-        self.sort(&mut roots);
-        for kids in children.values_mut() {
-            self.sort(kids);
+
+        // rank each node by the sum of the sort metric across its whole subtree
+        let own: HashMap<Pid, f64> = procs
+            .iter()
+            .map(|p| (p.pid, self.state.sort_by.from_sproc(p)))
+            .collect();
+        let mut totals: HashMap<Pid, f64> = HashMap::new();
+        for &p in procs {
+            subtree_total(p.pid, &own, &children, &mut totals, &mut HashSet::new());
         }
+        let rank = |sp: &SProc| {
+            let t = totals.get(&sp.pid).copied().unwrap_or(0.0);
+            match self.state.sort_dir {
+                Dir::Asc => OrdFloat(t),
+                Dir::Desc => OrdFloat(-t),
+            }
+        };
+        roots.sort_by_key(|&sp| rank(sp));
+        for kids in children.values_mut() {
+            kids.sort_by_key(|&sp| rank(sp));
+        }
+
         let mut out = Vec::with_capacity(procs.len());
         let mut visited = HashSet::new();
         for &root in &roots {
@@ -288,6 +308,33 @@ fn summary_line(s: &SysSummary) -> Line<'static> {
         s.tasks
     )));
     Line::from(spans)
+}
+
+/// Sum of `own[node]` over `pid` and all its descendants, memoized into
+/// `totals`. `visiting` guards against parent cycles.
+fn subtree_total(
+    pid: Pid,
+    own: &HashMap<Pid, f64>,
+    children: &HashMap<Pid, Vec<&SProc>>,
+    totals: &mut HashMap<Pid, f64>,
+    visiting: &mut HashSet<Pid>,
+) -> f64 {
+    if let Some(&t) = totals.get(&pid) {
+        return t;
+    }
+    let own_val = own.get(&pid).copied().unwrap_or(0.0);
+    if !visiting.insert(pid) {
+        return own_val; // cycle: count this node once, don't recurse
+    }
+    let mut total = own_val;
+    if let Some(kids) = children.get(&pid) {
+        for k in kids {
+            total += subtree_total(k.pid, own, children, totals, visiting);
+        }
+    }
+    visiting.remove(&pid);
+    totals.insert(pid, total);
+    total
 }
 
 /// DFS helper for `tree_rows`; `visited` guards against parent cycles.
@@ -523,6 +570,26 @@ mod tests {
                 .unwrap()
         };
         assert!(pos(1) < pos(2) && pos(2) < pos(3)); // children follow their parent
+    }
+
+    #[test]
+    fn tree_sorts_branches_by_subtree_total_not_own_value() {
+        // root A is near-idle (cpu 1) but its child pegs a core (cpu 100);
+        // root B uses cpu 50. By subtree total A's branch (101) outranks B (50),
+        // so A and its child come first despite A's tiny own value.
+        let mut a = SProc::blank(1, "A");
+        a.cpu_ewma = 1.0;
+        let mut child = SProc::blank(2, "child");
+        child.cpu_ewma = 100.0;
+        child.parent = Some(Pid::from(1usize));
+        let mut b = SProc::blank(3, "B");
+        b.cpu_ewma = 50.0;
+        let all = vec![&a, &child, &b];
+
+        // default sort is Cpu, Desc
+        let rows = View::default().tree_rows(&all);
+        let pids: Vec<u32> = rows.iter().map(|(sp, _)| sp.pid.as_u32()).collect();
+        assert_eq!(pids, vec![1, 2, 3]); // A, child-of-A, then B
     }
 
     #[test]
