@@ -34,7 +34,7 @@ fn main() -> Result<()> {
 fn run(terminal: &mut DefaultTerminal, opt: &Opt) -> Result<()> {
     let tick_rate = Duration::from_secs_f64(opt.delay);
     let mut sprocs = SProcs::default();
-    let mut view = View::default();
+    let mut view = View::new(opt.delay);
 
     // Prime the first frame with an initial sample so the table isn't empty.
     sprocs.update(opt.ewma_weight);

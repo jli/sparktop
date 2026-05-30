@@ -15,6 +15,8 @@ pub struct ViewState {
     pub displayed_columns: DisplayedColumns,
     /// Currently-selected process, tracked by pid so it survives re-sorts.
     pub selected: Option<Pid>,
+    /// Whether the full-screen process detail view is open.
+    pub show_detail: bool,
     pub should_quit: bool,
     action: Action,
 }
@@ -53,8 +55,11 @@ impl ViewState {
     }
 
     pub fn footer(&self) -> String {
+        if self.show_detail {
+            return String::from("esc back  ↑↓ prev/next process  q quit");
+        }
         match &self.action {
-            Action::Top => format!("{}  ↑↓ select  q quit", Action::action_help()),
+            Action::Top => format!("{}  ↑↓ select  ⏎ details  q quit", Action::action_help()),
             Action::SelectSort => Action::sort_col_help(),
             Action::ToggleColumn => Action::display_col_help(),
         }

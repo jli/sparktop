@@ -20,6 +20,22 @@ where
     result
 }
 
+/// Format a byte count with a binary unit suffix (e.g. 1536.0 -> "1.5KB").
+pub fn human_bytes(bytes: f64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = bytes;
+    let mut i = 0;
+    while v >= 1024.0 && i < UNITS.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{:.0}{}", v, UNITS[i])
+    } else {
+        format!("{:.1}{}", v, UNITS[i])
+    }
+}
+
 pub fn cpu_color(cpu: f64) -> Option<Color> {
     if cpu >= 400.0 {
         Some(Color::Magenta)
@@ -70,6 +86,13 @@ mod tests {
     fn render_vec_maps_each_sample_to_one_bar() {
         let hist = [0.0, 50.0, 100.0];
         assert_eq!(render_vec_colored(hist.iter(), 100.).len(), 3);
+    }
+
+    #[test]
+    fn human_bytes_scales_units() {
+        assert_eq!(human_bytes(512.0), "512B");
+        assert_eq!(human_bytes(1536.0), "1.5KB");
+        assert_eq!(human_bytes(5.0 * 1024.0 * 1024.0), "5.0MB");
     }
 
     #[test]

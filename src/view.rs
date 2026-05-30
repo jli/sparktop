@@ -12,7 +12,7 @@ use ratatui::{
 use sysinfo::Pid;
 
 use crate::{
-    render,
+    detail, render,
     sproc::SProc,
     view_state::{render_metric, Dir, DisplayColumn, DisplayedColumns, SortColumn, ViewState},
 };
@@ -24,9 +24,18 @@ pub struct View {
     /// up/down navigation into a concrete selected pid.
     order: Vec<Pid>,
     table_state: TableState,
+    /// seconds between samples, for labelling the detail-view time axis.
+    secs_per_sample: f64,
 }
 
 impl View {
+    pub fn new(secs_per_sample: f64) -> Self {
+        Self {
+            secs_per_sample,
+            ..Default::default()
+        }
+    }
+
     fn sort(&self, sprocs: &mut [&SProc]) {
         sprocs.sort_by_key(|&sp| {
             let val = self.state.sort_by.from_sproc(sp);
@@ -39,9 +48,24 @@ impl View {
 
     /// Handle a key press, returning true if the app should quit.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
+        // The detail view has its own small key map; up/down flip between
+        // processes so you can scan their graphs without leaving it.
+        if self.state.show_detail {
+            match key.code {
+                KeyCode::Esc => self.state.show_detail = false,
+                KeyCode::Up => self.move_selection(-1),
+                KeyCode::Down => self.move_selection(1),
+                KeyCode::Char('q') => self.state.should_quit = true,
+                _ => {}
+            }
+            return self.state.should_quit;
+        }
         match key.code {
             KeyCode::Up if self.state.is_top() => self.move_selection(-1),
             KeyCode::Down if self.state.is_top() => self.move_selection(1),
+            KeyCode::Enter if self.state.is_top() && self.state.selected.is_some() => {
+                self.state.show_detail = true;
+            }
             _ => self.state.handle_key(key),
         }
         self.state.should_quit
@@ -73,11 +97,17 @@ impl View {
         // TableState scroll to keep it visible)
         let selected_index = self.selected_index();
         self.table_state.select(selected_index);
+        // if the selected process is gone, drop back out of the detail view
+        if self.state.show_detail && selected_index.is_none() {
+            self.state.show_detail = false;
+        }
 
         // erhm, borrow checker workarounds...
         let sort_by = self.state.sort_by;
         let display_columns = self.state.displayed_columns.clone();
         let footer = self.state.footer();
+        let show_detail = self.state.show_detail;
+        let secs_per_sample = self.secs_per_sample;
         let table_state = &mut self.table_state;
         terminal.draw(|f| {
             let full = f.area();
@@ -88,17 +118,23 @@ impl View {
                 ])
                 .split(full);
 
-            // Draw process list.
-            // need to create constraints here bc the table doesn't take
-            // ownership and would be dropping it at the end.
-            let constraints: Vec<Constraint> = display_columns
-                .shown()
-                .iter()
-                .map(|c| c.constraint)
-                .collect();
+            if show_detail {
+                if let Some(sp) = selected_index.map(|i| sprocs[i]) {
+                    detail::render_detail(f, rects[0], sp, secs_per_sample);
+                }
+            } else {
+                // Draw process list.
+                // need to create constraints here bc the table doesn't take
+                // ownership and would be dropping it at the end.
+                let constraints: Vec<Constraint> = display_columns
+                    .shown()
+                    .iter()
+                    .map(|c| c.constraint)
+                    .collect();
 
-            let proc_table = ProcTable::build(sprocs, sort_by, &display_columns, &constraints);
-            f.render_stateful_widget(proc_table, rects[0], table_state);
+                let proc_table = ProcTable::build(sprocs, sort_by, &display_columns, &constraints);
+                f.render_stateful_widget(proc_table, rects[0], table_state);
+            }
 
             // Draw help footer.
             f.render_widget(
