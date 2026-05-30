@@ -31,6 +31,10 @@ pub struct ViewState {
     pub tree: bool,
     /// Combine same-named processes into one summed row.
     pub aggregate: bool,
+    /// Rank by sustained CPU (slow `cpu_rank` EWMA) instead of the instant
+    /// value, so transient spikes don't jump a process to the top. On by
+    /// default; only affects the CPU sort.
+    pub sustained: bool,
     pub should_quit: bool,
     action: Action,
 }
@@ -49,6 +53,7 @@ impl Default for ViewState {
             filtering: false,
             tree: false,
             aggregate: false,
+            sustained: true,
             should_quit: false,
             action: Action::default(),
         }
@@ -66,6 +71,7 @@ impl ViewState {
             (&Top, KeyCode::Char('i')) => self.hide_idle = !self.hide_idle,
             (&Top, KeyCode::Char('t')) => self.tree = !self.tree,
             (&Top, KeyCode::Char('a')) => self.aggregate = !self.aggregate,
+            (&Top, KeyCode::Char('r')) => self.sustained = !self.sustained,
             // cycle bar height 1 -> 2 -> 3 -> 1
             (&Top, KeyCode::Char('b')) => self.bar_height = self.bar_height % 3 + 1,
             (&Top, KeyCode::Char(c)) => {
@@ -110,7 +116,7 @@ impl ViewState {
         match &self.action {
             Action::Top => {
                 let mut f = format!(
-                    "(/)filter  {}  (i)dle (t)ree (a)gg (b)ars  ↑↓ ⏎ details  q quit",
+                    "(/)filter  {}  (i)dle (t)ree (a)gg (b)ars (r)ank  ↑↓ ⏎ details  q quit",
                     Action::action_help()
                 );
                 if !self.filter.is_empty() {

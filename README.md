@@ -52,8 +52,9 @@ cargo run -- -d 0.5 -e 0.3 # custom refresh (s) and ewma weight (0..1)
 | `c`      | toggle which columns are shown                     |
 | `i`      | show/hide idle (low-cpu) processes                 |
 | `t`      | toggle process tree view                           |
-| `a`      | aggregate same-named processes into one row        |
+| `a`      | aggregate same-app processes into one row (folds helpers, e.g. Chrome) |
 | `b`      | cycle bar height (1 → 2 → 3)                        |
+| `r`      | toggle sustained vs instant CPU ranking (sustained on by default) |
 | `q` / `^C` | quit                                             |
 
 The footer always lists the keys for the current mode.

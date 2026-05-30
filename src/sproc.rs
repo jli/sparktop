@@ -4,6 +4,11 @@ use sysinfo::{Pid, Process, ProcessStatus};
 
 const SAMPLE_LIMIT: usize = 60;
 
+/// Weight for the slow "sustained CPU" EWMA used to *rank* processes (separate
+/// from the user-tunable display EWMA). Small, so a brief spike barely moves it
+/// and only sustained load climbs it — roughly a 7-tick half-life.
+const CPU_RANK_WEIGHT: f64 = 0.1;
+
 #[derive(Debug)]
 pub struct SProc {
     pub pid: Pid,
@@ -21,6 +26,10 @@ pub struct SProc {
     pub run_secs: u64,
     pub cpu_ewma: f64,
     pub cpu_hist: VecDeque<f64>,
+    /// slow-decaying "sustained" CPU EWMA used for rank inertia (see
+    /// CPU_RANK_WEIGHT). Starts at 0 so a freshly-spiking process ranks low and
+    /// only climbs if its usage persists. Not displayed.
+    pub cpu_rank: f64,
     /// resident memory in bytes (sysinfo reports bytes since 0.30)
     pub mem_bytes: f64,
     pub mem_hist: VecDeque<f64>,
@@ -87,6 +96,7 @@ impl SProc {
         ewma_weight: f64,
     ) {
         self.cpu_ewma = ewma(cpu, self.cpu_ewma, ewma_weight);
+        self.cpu_rank = ewma(cpu, self.cpu_rank, CPU_RANK_WEIGHT);
         self.mem_bytes = mem_bytes as f64;
         self.disk_read_ewma = ewma(disk_read_bytes as f64, self.disk_read_ewma, ewma_weight);
         self.disk_write_ewma = ewma(disk_write_bytes as f64, self.disk_write_ewma, ewma_weight);
@@ -114,6 +124,7 @@ impl SProc {
             run_secs: p.run_time(),
             cpu_ewma: p.cpu_usage().into(),
             cpu_hist: vec![p.cpu_usage().into()].into(),
+            cpu_rank: 0.0, // start low; climbs only with sustained usage
             mem_bytes: p.memory() as f64,
             mem_hist: vec![p.memory() as f64].into(),
             disk_read_ewma: du.read_bytes as f64,
@@ -150,6 +161,7 @@ impl SProc {
             run_secs: members.iter().map(|m| m.run_secs).max().unwrap_or(0),
             cpu_ewma: members.iter().map(|m| m.cpu_ewma).sum(),
             cpu_hist: sum_hist(members, |m| &m.cpu_hist),
+            cpu_rank: members.iter().map(|m| m.cpu_rank).sum(),
             mem_bytes: members.iter().map(|m| m.mem_bytes).sum(),
             mem_hist: sum_hist(members, |m| &m.mem_hist),
             disk_read_ewma: members.iter().map(|m| m.disk_read_ewma).sum(),
@@ -218,6 +230,7 @@ impl SProc {
             run_secs: 0,
             cpu_ewma: 0.0,
             cpu_hist: VecDeque::new(),
+            cpu_rank: 0.0,
             mem_bytes: 0.0,
             mem_hist: VecDeque::new(),
             disk_read_ewma: 0.0,
@@ -247,6 +260,21 @@ mod tests {
         let newest = (SAMPLE_LIMIT + 9) as f64;
         assert_eq!(sp.cpu_hist.front().copied(), Some(newest));
         assert_eq!(sp.mem_hist.front().copied(), Some(newest));
+    }
+
+    #[test]
+    fn cpu_rank_lags_spikes_and_climbs_with_sustained_load() {
+        let mut sp = SProc::blank(1, "t");
+        // one spike barely moves the slow rank (starts at 0)
+        sp.add_sample_helper(100.0, 0, 0, 0, 0.5);
+        let after_one = sp.cpu_rank;
+        assert!(after_one < 20.0, "a single spike barely moves the rank");
+        // sustained load climbs it well past the single-spike level
+        for _ in 0..20 {
+            sp.add_sample_helper(100.0, 0, 0, 0, 0.5);
+        }
+        assert!(sp.cpu_rank > 60.0, "sustained load climbs the rank");
+        assert!(sp.cpu_rank > after_one);
     }
 
     #[test]

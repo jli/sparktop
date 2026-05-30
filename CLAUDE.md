@@ -58,6 +58,21 @@ pre-commit run --all-files     # Run pre-commit hooks (fmt, cargo-check, clippy)
 
 ## Recent Changes
 
+**2026-05-30: sustained (time-weighted) CPU ranking**
+- `SProc.cpu_rank`: a slow EWMA (`CPU_RANK_WEIGHT = 0.1`, ~7-tick half-life)
+  alongside the display `cpu_ewma`, started at 0 so a freshly-spiking process
+  ranks low and only climbs if usage persists; long-sustained load stays sticky.
+  Summed in `SProc::aggregate`.
+- `ViewState.sustained` (default **on**), toggled with `r` ("(r)ank" in footer);
+  only affects the CPU sort. `View::rank_value`/`ranks_sustained` pick `cpu_rank`
+  vs the instant metric; used by both flat `sort` and tree `own`. Display/sort
+  can disagree (a just-spiked proc sits lower than a steady one) — the sparkline
+  column makes that legible.
+- `flat_rows` re-sorts every tick when `ranks_sustained()` (the slow metric is
+  smooth, so no jitter); the freeze still applies in instant mode. `last_sort`
+  gained the `sustained` bool so toggling forces a re-sort. Tests that assert
+  cpu-ordering use the `instant_view()` helper.
+
 **2026-05-30: CPU profiling pass + reversed tree + scoped flash**
 - **Disabled sysinfo's `multithread` (rayon) feature** (`default-features = false`
   in Cargo.toml). Profiling showed steady-state CPU was dominated not by the

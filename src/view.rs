@@ -36,7 +36,7 @@ pub struct View {
     /// jumping every tick. Re-sorted only when the visible set or sort changes.
     flat_order: Vec<Pid>,
     flat_pids: HashSet<Pid>,
-    last_sort: Option<(SortColumn, Dir)>,
+    last_sort: Option<(SortColumn, Dir, bool)>,
     /// pids shown last draw, to detect ones that just appeared.
     seen: HashSet<Pid>,
     /// ticks remaining to highlight a freshly-appeared row.
@@ -63,9 +63,26 @@ impl View {
         }
     }
 
+    /// True when the CPU sort is using the slow sustained `cpu_rank` metric
+    /// (the default) rather than the instant value.
+    fn ranks_sustained(&self) -> bool {
+        self.state.sustained && self.state.sort_by == SortColumn::Cpu
+    }
+
+    /// Value a process is *ordered* by. Normally the active sort metric, but in
+    /// sustained mode the CPU sort uses the slow `cpu_rank` EWMA so a transient
+    /// spike doesn't jump a process to the top (the displayed CPU stays live).
+    fn rank_value(&self, sp: &SProc) -> f64 {
+        if self.ranks_sustained() {
+            sp.cpu_rank
+        } else {
+            self.state.sort_by.from_sproc(sp)
+        }
+    }
+
     fn sort(&self, sprocs: &mut [&SProc]) {
         sprocs.sort_by_key(|&sp| {
-            let val = self.state.sort_by.from_sproc(sp);
+            let val = self.rank_value(sp);
             let signed = match self.state.sort_dir {
                 Dir::Asc => OrdFloat(val),
                 Dir::Desc => OrdFloat(-val),
@@ -82,8 +99,15 @@ impl View {
     /// previous order so rows stay put while their values update in place.
     fn flat_rows<'a>(&mut self, procs: &mut Vec<&'a SProc>) -> Vec<(&'a SProc, String)> {
         let pids: HashSet<Pid> = procs.iter().map(|p| p.pid).collect();
-        let sort_key = (self.state.sort_by, self.state.sort_dir);
-        if self.last_sort != Some(sort_key) || pids != self.flat_pids {
+        let sort_key = (
+            self.state.sort_by,
+            self.state.sort_dir,
+            self.state.sustained,
+        );
+        // In sustained mode the sort key (slow cpu_rank) is smooth, so re-sort
+        // every tick for gradual easing — the jitter that motivated freezing the
+        // order only happens under the noisy instant metric.
+        if self.ranks_sustained() || self.last_sort != Some(sort_key) || pids != self.flat_pids {
             self.sort(procs);
             self.flat_order = procs.iter().map(|p| p.pid).collect();
             self.flat_pids = pids;
@@ -197,10 +221,7 @@ impl View {
         }
 
         // rank each node by the sum of the sort metric across its whole subtree
-        let own: HashMap<Pid, f64> = procs
-            .iter()
-            .map(|p| (p.pid, self.state.sort_by.from_sproc(p)))
-            .collect();
+        let own: HashMap<Pid, f64> = procs.iter().map(|p| (p.pid, self.rank_value(p))).collect();
         let mut totals: HashMap<Pid, f64> = HashMap::new();
         for &p in procs {
             subtree_total(p.pid, &own, &children, &mut totals, &mut HashSet::new());
@@ -567,13 +588,16 @@ fn push_subtree<'a>(
 /// Width (in chars) reserved for each core's sparkline, regardless of how many
 /// samples have accumulated, so the grid doesn't reflow as history fills in.
 const CORE_SPARK_LEN: usize = 16;
-/// Preferred cores per row (8 cores -> 2 rows); reduced to fit narrow terminals.
+/// Preferred cores per row (so an 8-core machine shows 4 per row, 2 rows);
+/// reduced to fit narrow terminals.
 const CORE_PER_ROW: usize = 4;
 
-/// Compact per-core usage sparklines for the header: "0 ▁▂▃ 1 ▅▆▇ ...", each
-/// core colored by load. Cells are fixed width (bars grow from the right as
-/// history fills) and laid out in a balanced grid that targets CORE_PER_ROW per
-/// row but adapts to the terminal width and core count.
+/// Compact per-core usage sparklines for the header, drawn two terminal lines
+/// tall for extra vertical resolution: the bottom cell covers 0-50% and the top
+/// cell 50-100%, each colored by load. Cells are fixed width (bars grow from the
+/// right as history fills) and laid out in a balanced grid that targets
+/// CORE_PER_ROW per row but adapts to the terminal width and core count. Each
+/// grid row therefore emits two `Line`s (top half, then bottom half).
 fn core_lines(cores: &[Vec<f64>], width: u16) -> Vec<Line<'static>> {
     if cores.is_empty() {
         return Vec::new();
@@ -588,11 +612,15 @@ fn core_lines(cores: &[Vec<f64>], width: u16) -> Vec<Line<'static>> {
     let rows = n.div_ceil(target);
     let per_row = n.div_ceil(rows);
 
-    let cells: Vec<Vec<Span>> = cores
+    // each core renders to a (top, bottom) pair of span rows
+    let cells: Vec<(Vec<Span>, Vec<Span>)> = cores
         .iter()
         .enumerate()
         .map(|(i, samples)| {
-            let mut cell = vec![Span::styled(
+            // label sits on the bottom (baseline) row; the top row is blank over
+            // the label column
+            let mut top = vec![Span::raw(" ".repeat(label_w + 1))];
+            let mut bottom = vec![Span::styled(
                 format!("{i:>label_w$} "),
                 Style::default().fg(Color::DarkGray),
             )];
@@ -600,23 +628,37 @@ fn core_lines(cores: &[Vec<f64>], width: u16) -> Vec<Line<'static>> {
             // layout stays put while the history populates
             let shown = samples.len().min(CORE_SPARK_LEN);
             for _ in 0..CORE_SPARK_LEN - shown {
-                cell.push(Span::raw(" "));
+                top.push(Span::raw(" "));
+                bottom.push(Span::raw(" "));
             }
             for &v in samples.iter().take(CORE_SPARK_LEN) {
                 let frac = (v / 100.0).clamp(0.0, 1.0);
-                cell.push(Span::styled(
-                    render::float_bar(frac).to_string(),
-                    Style::default().fg(render::heat(frac)),
+                let color = render::heat(frac);
+                // split 0-100% across two rows: bottom = 0-50%, top = 50-100%
+                let bottom_local = (frac * 2.0).clamp(0.0, 1.0);
+                let top_local = (frac * 2.0 - 1.0).clamp(0.0, 1.0);
+                top.push(Span::styled(
+                    render::float_bar(top_local).to_string(),
+                    Style::default().fg(color),
+                ));
+                bottom.push(Span::styled(
+                    render::float_bar(bottom_local).to_string(),
+                    Style::default().fg(color),
                 ));
             }
-            cell.push(Span::raw(" "));
-            cell
+            top.push(Span::raw(" "));
+            bottom.push(Span::raw(" "));
+            (top, bottom)
         })
         .collect();
 
     cells
         .chunks(per_row)
-        .map(|chunk| Line::from(chunk.iter().flatten().cloned().collect::<Vec<_>>()))
+        .flat_map(|chunk| {
+            let top: Vec<Span> = chunk.iter().flat_map(|(t, _)| t.iter().cloned()).collect();
+            let bottom: Vec<Span> = chunk.iter().flat_map(|(_, b)| b.iter().cloned()).collect();
+            vec![Line::from(top), Line::from(bottom)]
+        })
         .collect()
 }
 
@@ -788,6 +830,33 @@ mod tests {
         sp
     }
 
+    /// A view that ranks by the instant CPU metric, for tests that exercise
+    /// ordering by `cpu_ewma` independent of the sustained-rank default.
+    fn instant_view() -> View {
+        let mut v = View::default();
+        v.state.sustained = false;
+        v
+    }
+
+    // visual aid: cargo test --lib -- --ignored --nocapture core_preview
+    #[test]
+    #[ignore]
+    fn core_preview() {
+        // 4 cores at increasing steady levels, plus a ramp on core 0
+        let cores = vec![
+            vec![5.0, 20.0, 45.0, 70.0, 95.0, 100.0, 60.0, 30.0],
+            vec![15.0; 8],
+            vec![55.0; 8],
+            vec![98.0; 8],
+        ];
+        println!("\n--- core graphs (double height) ---");
+        for line in core_lines(&cores, 240) {
+            let s: String = line.spans.iter().map(|sp| sp.content.as_ref()).collect();
+            println!("{s}");
+        }
+        println!();
+    }
+
     // visual aid: cargo test --lib -- --ignored --nocapture tree_preview
     #[test]
     #[ignore]
@@ -833,9 +902,14 @@ mod tests {
 
     #[test]
     fn core_lines_grid_is_balanced_and_stable() {
-        // 8 cores, wide terminal -> 2 rows of 4 (default CORE_PER_ROW)
+        // each grid row is two lines tall (double-height bars). 8 cores wide ->
+        // 4 per row => 2 grid rows => 4 lines.
         let eight: Vec<Vec<f64>> = (0..8).map(|_| vec![10.0]).collect();
-        assert_eq!(core_lines(&eight, 240).len(), 2);
+        assert_eq!(core_lines(&eight, 240).len(), 4);
+
+        // a single grid row still emits two lines
+        let two: Vec<Vec<f64>> = (0..2).map(|_| vec![10.0]).collect();
+        assert_eq!(core_lines(&two, 240).len(), 2);
 
         // layout doesn't change as history fills (1 sample vs full)
         let eight_full: Vec<Vec<f64>> = (0..8).map(|_| vec![10.0; CORE_SPARK_LEN]).collect();
@@ -844,8 +918,8 @@ mod tests {
             core_lines(&eight_full, 240).len()
         );
 
-        // narrow terminal fits fewer per row -> more rows
-        assert!(core_lines(&eight, 40).len() > 2);
+        // narrow terminal fits fewer per row -> more grid rows -> more lines
+        assert!(core_lines(&eight, 40).len() > 4);
 
         assert!(core_lines(&[], 80).is_empty());
     }
@@ -956,11 +1030,11 @@ mod tests {
         b.cpu_ewma = 50.0;
         let all = vec![&a, &child, &b];
 
-        // default sort is Cpu, Desc. Leaves sit on top, roots at the bottom, but
+        // sort Cpu, Desc (instant). Leaves sit on top, roots at the bottom, but
         // the *busiest* branch still ranks to the top: A's subtree (101)
         // outranks B (50), so A's busy child is at the very top, A right below
         // it, then B at the bottom.
-        let rows = View::default().tree_rows(&all);
+        let rows = instant_view().tree_rows(&all);
         let pids: Vec<u32> = rows.iter().map(|r| r.0.pid.as_u32()).collect();
         assert_eq!(pids, vec![2, 1, 3]); // child-of-A (top), A, then B at bottom
     }
@@ -980,7 +1054,7 @@ mod tests {
         root2.cpu_ewma = 50.0;
         let all = vec![&root1, &leaf_a, &leaf_b, &root2];
 
-        let rows = View::default().tree_rows(&all); // Cpu, Desc
+        let rows = instant_view().tree_rows(&all); // Cpu, Desc (instant)
         let pids: Vec<u32> = rows.iter().map(|r| r.0.pid.as_u32()).collect();
         // top -> bottom: busiest leaf, then its sibling, then their parent, then
         // the lower-ranked standalone root at the very bottom.
@@ -1120,7 +1194,9 @@ mod tests {
         a.cpu_ewma = 10.0;
         let mut b = SProc::blank(2, "b");
         b.cpu_ewma = 5.0;
-        let mut v = View::default(); // Cpu, Desc
+        // freezing only applies in instant mode; sustained mode intentionally
+        // re-sorts every tick (its metric is smooth).
+        let mut v = instant_view(); // Cpu, Desc (instant)
 
         let order =
             |rows: &[(&SProc, String)]| rows.iter().map(|r| r.0.pid.as_u32()).collect::<Vec<_>>();
@@ -1144,6 +1220,36 @@ mod tests {
         c.cpu_ewma = 8.0;
         let rows = v.flat_rows(&mut vec![&a_low, &b, &c]);
         assert_eq!(order(&rows), vec![3, 2, 1], "re-sorts on membership change");
+    }
+
+    #[test]
+    fn sustained_ranking_orders_by_slow_rank_not_instant_spike() {
+        // spiker is high right now but has no sustained history; steady is lower
+        // right now but has built up a high sustained rank.
+        let mut spiker = SProc::blank(1, "spiker");
+        spiker.cpu_ewma = 95.0;
+        spiker.cpu_rank = 5.0;
+        let mut steady = SProc::blank(2, "steady");
+        steady.cpu_ewma = 40.0;
+        steady.cpu_rank = 38.0;
+
+        let order =
+            |rows: &[(&SProc, String)]| rows.iter().map(|r| r.0.pid.as_u32()).collect::<Vec<_>>();
+
+        // default (sustained on): steady outranks the fresh spike
+        let mut v = View::default();
+        let rows = v.flat_rows(&mut vec![&spiker, &steady]);
+        assert_eq!(
+            order(&rows),
+            vec![2, 1],
+            "sustained: steady above fresh spike"
+        );
+
+        // toggling sustained off ranks by the instant value -> spiker jumps up.
+        // (also verifies the toggle forces a re-sort despite the frozen order)
+        v.state.sustained = false;
+        let rows = v.flat_rows(&mut vec![&spiker, &steady]);
+        assert_eq!(order(&rows), vec![1, 2], "instant: fresh spike on top");
     }
 
     #[test]
