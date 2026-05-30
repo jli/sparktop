@@ -10,6 +10,18 @@ pub struct SProcs {
     sprocs: HashMap<Pid, SProc>,
 }
 
+/// A snapshot of system-wide stats for the summary header.
+pub struct SysSummary {
+    pub cpu_pct: f64,
+    pub mem_used: u64,
+    pub mem_total: u64,
+    pub swap_used: u64,
+    pub swap_total: u64,
+    pub load: (f64, f64, f64),
+    pub uptime: u64,
+    pub tasks: usize,
+}
+
 impl Default for SProcs {
     fn default() -> Self {
         Self {
@@ -26,6 +38,7 @@ impl SProcs {
         // isn't totally crazy, modern cpu power save features can scale things
         // and bust readings.
         self.sys.refresh_cpu();
+        self.sys.refresh_memory();
         self.sys.refresh_processes();
         let latest_procs = self.sys.processes();
         for (&pid, proc) in latest_procs {
@@ -59,5 +72,19 @@ impl SProcs {
 
     pub fn get(&self) -> Values<Pid, SProc> {
         self.sprocs.values()
+    }
+
+    pub fn summary(&self) -> SysSummary {
+        let la = System::load_average();
+        SysSummary {
+            cpu_pct: self.sys.global_cpu_info().cpu_usage() as f64,
+            mem_used: self.sys.used_memory(),
+            mem_total: self.sys.total_memory(),
+            swap_used: self.sys.used_swap(),
+            swap_total: self.sys.total_swap(),
+            load: (la.one, la.five, la.fifteen),
+            uptime: System::uptime(),
+            tasks: self.sys.processes().len(),
+        }
     }
 }

@@ -14,6 +14,7 @@ use sysinfo::Pid;
 use crate::{
     detail, render,
     sproc::SProc,
+    sprocs::SysSummary,
     view_state::{
         render_bytes, render_metric, Dir, DisplayColumn, DisplayedColumns, SortColumn, ViewState,
         IDLE_CPU_PCT,
@@ -136,7 +137,12 @@ impl View {
         self.order.iter().position(|&p| p == pid)
     }
 
-    pub fn draw(&mut self, terminal: &mut DefaultTerminal, sprocs: &[&SProc]) -> Result<()> {
+    pub fn draw(
+        &mut self,
+        terminal: &mut DefaultTerminal,
+        summary: &SysSummary,
+        sprocs: &[&SProc],
+    ) -> Result<()> {
         let mut procs = self.visible(sprocs);
         self.sort(&mut procs);
         self.order = procs.iter().map(|sp| sp.pid).collect();
@@ -156,19 +162,25 @@ impl View {
         let show_detail = self.state.show_detail;
         let bar_height = self.state.bar_height;
         let secs_per_sample = self.secs_per_sample;
+        let summary_line = summary_line(summary);
         let table_state = &mut self.table_state;
         terminal.draw(|f| {
             let full = f.area();
+            // summary header (1) + main area + footer (1)
             let rects = Layout::default()
                 .constraints([
-                    Constraint::Length(full.height.saturating_sub(1)),
+                    Constraint::Length(1),
+                    Constraint::Length(full.height.saturating_sub(2)),
                     Constraint::Length(1),
                 ])
                 .split(full);
+            f.render_widget(Paragraph::new(summary_line), rects[0]);
+            let main = rects[1];
+            let footer_area = rects[2];
 
             if show_detail {
                 if let Some(sp) = selected_index.map(|i| procs[i]) {
-                    detail::render_detail(f, rects[0], sp, secs_per_sample);
+                    detail::render_detail(f, main, sp, secs_per_sample);
                 }
             } else {
                 // Draw process list.
@@ -182,7 +194,7 @@ impl View {
 
                 let proc_table =
                     ProcTable::build(&procs, sort_by, &display_columns, &constraints, bar_height);
-                f.render_stateful_widget(proc_table, rects[0], table_state);
+                f.render_stateful_widget(proc_table, main, table_state);
             }
 
             // Draw help footer.
@@ -192,10 +204,65 @@ impl View {
                     Style::default().add_modifier(Modifier::UNDERLINED),
                 ))
                 .alignment(Alignment::Right),
-                rects[1],
+                footer_area,
             );
         })?;
         Ok(())
+    }
+}
+
+/// One-line system summary: cpu / mem / swap / load / uptime / task count,
+/// with cpu and mem shaded by load.
+fn summary_line(s: &SysSummary) -> Line<'static> {
+    let pct = |used: u64, total: u64| {
+        if total > 0 {
+            used as f64 / total as f64
+        } else {
+            0.0
+        }
+    };
+    let mut spans = vec![
+        Span::raw("cpu "),
+        Span::styled(
+            format!("{:>3.0}%", s.cpu_pct),
+            Style::default().fg(render::heat(s.cpu_pct / 100.0)),
+        ),
+        Span::raw("  mem "),
+        Span::styled(
+            format!(
+                "{}/{}",
+                render::human_bytes(s.mem_used as f64),
+                render::human_bytes(s.mem_total as f64)
+            ),
+            Style::default().fg(render::heat(pct(s.mem_used, s.mem_total))),
+        ),
+    ];
+    if s.swap_total > 0 {
+        spans.push(Span::raw("  swap "));
+        spans.push(Span::styled(
+            render::human_bytes(s.swap_used as f64),
+            Style::default().fg(render::heat(pct(s.swap_used, s.swap_total))),
+        ));
+    }
+    spans.push(Span::raw(format!(
+        "  load {:.2} {:.2} {:.2}  up {}  {} tasks",
+        s.load.0,
+        s.load.1,
+        s.load.2,
+        fmt_uptime(s.uptime),
+        s.tasks
+    )));
+    Line::from(spans)
+}
+
+fn fmt_uptime(secs: u64) -> String {
+    let (d, h, m) = (secs / 86400, (secs % 86400) / 3600, (secs % 3600) / 60);
+    if d > 0 {
+        format!("{d}d{h}h")
+    } else if h > 0 {
+        format!("{h}h{m}m")
+    } else {
+        format!("{m}m")
     }
 }
 
@@ -294,6 +361,37 @@ mod tests {
     }
     fn keycode(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, ratatui::crossterm::event::KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn summary_line_includes_key_stats_and_hides_zero_swap() {
+        let s = SysSummary {
+            cpu_pct: 42.0,
+            mem_used: 8_000_000_000,
+            mem_total: 16_000_000_000,
+            swap_used: 0,
+            swap_total: 0,
+            load: (1.0, 2.0, 3.0),
+            uptime: 90_061, // 1d 1h 1m
+            tasks: 123,
+        };
+        let text: String = summary_line(&s)
+            .spans
+            .iter()
+            .map(|sp| sp.content.to_string())
+            .collect();
+        assert!(text.contains("42%"));
+        assert!(text.contains("load 1.00 2.00 3.00"));
+        assert!(text.contains("up 1d1h"));
+        assert!(text.contains("123 tasks"));
+        assert!(!text.contains("swap")); // hidden when there's no swap
+    }
+
+    #[test]
+    fn fmt_uptime_formats() {
+        assert_eq!(fmt_uptime(90_061), "1d1h");
+        assert_eq!(fmt_uptime(3_700), "1h1m");
+        assert_eq!(fmt_uptime(120), "2m");
     }
 
     #[test]

@@ -41,7 +41,11 @@ fn run(terminal: &mut DefaultTerminal, opt: &Opt) -> Result<()> {
     let mut last_tick = Instant::now();
 
     loop {
-        view.draw(terminal, &sprocs.get().collect::<Vec<_>>())?;
+        view.draw(
+            terminal,
+            &sprocs.summary(),
+            &sprocs.get().collect::<Vec<_>>(),
+        )?;
 
         // Block for input until it's time for the next tick. Resizes are handled
         // implicitly by the next draw, so we only need to react to keys.
