@@ -6,12 +6,14 @@ const SAMPLE_LIMIT: usize = 60;
 
 #[derive(Debug)]
 pub struct SProc {
-    // TODO: ppid, cmd, memory?
+    // TODO: cmd?
     pub pid: Pid,
+    pub parent: Option<Pid>,
     pub name: String,
     pub cpu_ewma: f64,
     pub cpu_hist: VecDeque<f64>,
-    pub mem_mb: f64,
+    /// resident memory in bytes (sysinfo reports bytes since 0.30)
+    pub mem_bytes: f64,
     pub mem_hist: VecDeque<f64>,
     // maybe want total bytes over history, and combined read/write?
     pub disk_read_ewma: f64,
@@ -65,17 +67,17 @@ impl SProc {
     fn add_sample_helper(
         &mut self,
         cpu: f64,
-        mem_kb: u64,
+        mem_bytes: u64,
         disk_read_bytes: u64,
         disk_write_bytes: u64,
         ewma_weight: f64,
     ) {
         self.cpu_ewma = ewma(cpu, self.cpu_ewma, ewma_weight);
-        self.mem_mb = (mem_kb as f64) / 1024.;
+        self.mem_bytes = mem_bytes as f64;
         self.disk_read_ewma = ewma(disk_read_bytes as f64, self.disk_read_ewma, ewma_weight);
         self.disk_write_ewma = ewma(disk_write_bytes as f64, self.disk_write_ewma, ewma_weight);
         push_sample(&mut self.cpu_hist, cpu, SAMPLE_LIMIT);
-        push_sample(&mut self.mem_hist, self.mem_mb, SAMPLE_LIMIT);
+        push_sample(&mut self.mem_hist, self.mem_bytes, SAMPLE_LIMIT);
         push_sample(&mut self.disk_read_hist, disk_read_bytes, SAMPLE_LIMIT);
         push_sample(&mut self.disk_write_hist, disk_write_bytes, SAMPLE_LIMIT);
     }
@@ -86,12 +88,13 @@ impl From<&Process> for SProc {
         let du = p.disk_usage();
         Self {
             pid: p.pid(),
+            parent: p.parent(),
             name: p.name().into(),
             cpu_ewma: p.cpu_usage().into(),
             // TODO: how does the final into() work?
             cpu_hist: vec![p.cpu_usage().into()].into(),
-            mem_mb: (p.memory() as f64) / 1024.,
-            mem_hist: vec![(p.memory() as f64) / 1024.].into(),
+            mem_bytes: p.memory() as f64,
+            mem_hist: vec![p.memory() as f64].into(),
             disk_read_ewma: du.read_bytes as f64, // TODO: how come no into()?
             disk_read_hist: vec![du.read_bytes].into(),
             disk_write_ewma: du.written_bytes as f64,
@@ -116,10 +119,11 @@ impl SProc {
     pub fn blank(pid: u32, name: &str) -> Self {
         Self {
             pid: Pid::from(pid as usize),
+            parent: None,
             name: name.to_string(),
             cpu_ewma: 0.0,
             cpu_hist: VecDeque::new(),
-            mem_mb: 0.0,
+            mem_bytes: 0.0,
             mem_hist: VecDeque::new(),
             disk_read_ewma: 0.0,
             disk_read_hist: VecDeque::new(),
@@ -138,8 +142,7 @@ mod tests {
     fn histories_track_newest_first_and_cap_at_limit() {
         let mut sp = SProc::blank(1, "t");
         for i in 0..(SAMPLE_LIMIT + 10) {
-            // mem_kb = i*1024 so mem_mb == i, making the expected value obvious
-            sp.add_sample_helper(i as f64, (i as u64) * 1024, i as u64, 0, 1.0);
+            sp.add_sample_helper(i as f64, i as u64, i as u64, 0, 1.0);
         }
         assert_eq!(sp.cpu_hist.len(), SAMPLE_LIMIT);
         assert_eq!(sp.mem_hist.len(), SAMPLE_LIMIT);

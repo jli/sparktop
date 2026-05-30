@@ -233,7 +233,7 @@ const VIEW_DISPLAY_COLUMNS: [ViewDisplayColumn; 7] = [
         key: 'm',
         help: "(m)em",
         header: "mem",
-        constraint: Constraint::Length(5),
+        constraint: Constraint::Length(7),
     },
     ViewDisplayColumn {
         column: DisplayColumn::Cpu,
@@ -341,7 +341,7 @@ impl SortColumn {
         match self {
             SortColumn::Pid => sp.pid.as_u32() as f64,
             SortColumn::Cpu => sp.cpu_ewma,
-            SortColumn::Mem => sp.mem_mb,
+            SortColumn::Mem => sp.mem_bytes,
             SortColumn::DiskRead => sp.disk_read_ewma,
             SortColumn::DiskWrite => sp.disk_write_ewma,
             SortColumn::DiskTotal => sp.disk_read_ewma + sp.disk_write_ewma,

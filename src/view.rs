@@ -231,7 +231,7 @@ impl ProcTable {
         // shaded relative to its own scale -- big values pop in every column
         let col_max = |f: fn(&SProc) -> f64| sprocs.iter().map(|&sp| f(sp)).fold(0.0, f64::max);
         let max_cpu = col_max(|sp| sp.cpu_ewma);
-        let max_mem = col_max(|sp| sp.mem_mb);
+        let max_mem = col_max(|sp| sp.mem_bytes);
         let max_dr = col_max(|sp| sp.disk_read_ewma);
         let max_dw = col_max(|sp| sp.disk_write_ewma);
 
@@ -255,7 +255,7 @@ impl ProcTable {
                     max_dw,
                     sp,
                 ),
-                Mem => heat_cell(render_metric(sp.mem_mb), sp.mem_mb, max_mem, sp),
+                Mem => heat_cell(render_bytes(sp.mem_bytes), sp.mem_bytes, max_mem, sp),
                 Cpu => heat_cell(render_metric(sp.cpu_ewma), sp.cpu_ewma, max_cpu, sp),
                 // taller bars get more vertical resolution; one Line per row
                 CpuHistory => {

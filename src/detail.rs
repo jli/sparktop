@@ -66,7 +66,7 @@ pub fn render_detail(f: &mut Frame, area: Rect, sp: &SProc, secs_per_sample: f64
         "Memory",
         &[("mem", Color::Green, &mem)],
         secs_per_sample,
-        |v| format!("{:.0}MB", v),
+        human_bytes,
     );
     render_chart(
         f,
@@ -89,8 +89,10 @@ fn render_header(f: &mut Frame, area: Rect, sp: &SProc) {
     let header = Line::from(vec![
         Span::styled(format!(" {} ", sp.name), name),
         Span::raw(format!(
-            "  pid {}   cpu {:.1}%   mem {:.1}MB",
-            sp.pid, sp.cpu_ewma, sp.mem_mb
+            "  pid {}   cpu {:.1}%   mem {}",
+            sp.pid,
+            sp.cpu_ewma,
+            human_bytes(sp.mem_bytes)
         )),
     ]);
     f.render_widget(Paragraph::new(header), area);
@@ -225,7 +227,7 @@ mod tests {
                 .push_front(if i % 7 == 0 { 800_000 } else { 500 });
         }
         sp.cpu_ewma = 52.3;
-        sp.mem_mb = 512.0;
+        sp.mem_bytes = 512.0 * 1024.0 * 1024.0;
         for (w, h, label) in [(110, 32, "tall (vertical)"), (150, 14, "short & wide")] {
             let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
             t.draw(|f| render_detail(f, f.area(), &sp, 1.0)).unwrap();
