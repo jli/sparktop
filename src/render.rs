@@ -4,18 +4,6 @@ use ratatui::{
     text::Span,
 };
 
-pub fn render_vec<'a, II>(xs: II, max: f64) -> String
-where
-    II: IntoIterator<Item = &'a f64>,
-{
-    let mut r = String::new();
-    for x in xs.into_iter() {
-        let p = *x / max;
-        r.push(float_bar(p));
-    }
-    r
-}
-
 pub fn render_vec_colored<'a, II>(xs: II, max: f64) -> Vec<Span<'a>>
 where
     II: IntoIterator<Item = &'a f64>,
@@ -80,8 +68,8 @@ mod tests {
 
     #[test]
     fn render_vec_maps_each_sample_to_one_bar() {
-        let hist = vec![0.0, 50.0, 100.0];
-        assert_eq!(render_vec(hist.iter(), 100.).chars().count(), 3);
+        let hist = [0.0, 50.0, 100.0];
+        assert_eq!(render_vec_colored(hist.iter(), 100.).len(), 3);
     }
 
     #[test]

@@ -1,5 +1,7 @@
 /// ViewState: view model and interactions.
 // rendering is done in view.rs
+use std::collections::HashSet;
+
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Constraint;
 
@@ -10,7 +12,6 @@ pub struct ViewState {
     pub sort_by: SortColumn,
     pub sort_dir: Dir,
     pub displayed_columns: DisplayedColumns,
-    pub alert: Option<String>,
     pub should_quit: bool,
     action: Action,
 }
@@ -36,7 +37,7 @@ impl ViewState {
             }
             (&ToggleColumn, KeyCode::Char(c)) => {
                 if let Some(col) = Action::display_col_from_char(c) {
-                    self.displayed_columns.toggle(&col);
+                    self.displayed_columns.toggle(col);
                     self.action = Top;
                 }
             }
@@ -65,56 +66,59 @@ impl Action {
     fn action_from_char(input_c: char) -> Option<Action> {
         VIEW_ACTIONS
             .iter()
-            .find_map(|ViewAction(a, c, _)| if input_c == *c { Some(*a) } else { None })
+            .find_map(|a| (a.key == input_c).then_some(a.action))
     }
 
     fn action_help() -> String {
-        // note: can use iterator::intersperse when it's stable
-        let parts: Vec<&str> = VIEW_ACTIONS
-            .iter()
-            .map(|&ViewAction(_, _, help)| help)
-            .collect();
-        parts.join("  ")
+        join_help(VIEW_ACTIONS.iter().map(|a| a.help))
     }
 
     fn sort_col_from_char(input_c: char) -> Option<SortColumn> {
         VIEW_SORT_COLUMNS
             .iter()
-            .find_map(|ViewSortColumn(sc, c, _)| if input_c == *c { Some(*sc) } else { None })
+            .find_map(|c| (c.key == input_c).then_some(c.column))
     }
 
     fn sort_col_help() -> String {
-        let parts: Vec<&str> = VIEW_SORT_COLUMNS
-            .iter()
-            .map(|&ViewSortColumn(_, _, help)| help)
-            .collect();
-        parts.join("  ")
+        join_help(VIEW_SORT_COLUMNS.iter().map(|c| c.help))
     }
 
     fn display_col_from_char(input_c: char) -> Option<DisplayColumn> {
-        VIEW_DISPLAY_COLUMNS.iter().find_map(
-            |ViewDisplayColumn(dc, c, _, _, _)| if input_c == *c { Some(*dc) } else { None },
-        )
+        VIEW_DISPLAY_COLUMNS
+            .iter()
+            .find_map(|c| (c.key == input_c).then_some(c.column))
     }
 
     fn display_col_help() -> String {
-        let parts: Vec<&str> = VIEW_DISPLAY_COLUMNS
-            .iter()
-            .map(|ViewDisplayColumn(_, _, help, _, _)| help)
-            .copied()
-            .collect();
-        parts.join("  ")
+        join_help(VIEW_DISPLAY_COLUMNS.iter().map(|c| c.help))
     }
 }
 
-struct ViewAction(Action, char, &'static str);
+// note: can use Iterator::intersperse when it's stable
+fn join_help<'a>(parts: impl Iterator<Item = &'a str>) -> String {
+    parts.collect::<Vec<_>>().join("  ")
+}
+
+struct ViewAction {
+    action: Action,
+    key: char,
+    help: &'static str,
+}
 
 const VIEW_ACTIONS: [ViewAction; 2] = [
-    ViewAction(Action::SelectSort, 's', "(s)ort"),
-    ViewAction(Action::ToggleColumn, 'c', "(c)olumns"),
+    ViewAction {
+        action: Action::SelectSort,
+        key: 's',
+        help: "(s)ort",
+    },
+    ViewAction {
+        action: Action::ToggleColumn,
+        key: 'c',
+        help: "(c)olumns",
+    },
 ];
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DisplayColumn {
     Pid,
     ProcessName,
@@ -125,138 +129,101 @@ pub enum DisplayColumn {
     CpuHistory,
 }
 
-// column, action char, action help, column name
-// #[derive(Clone, Copy)]
-pub struct ViewDisplayColumn(
-    pub DisplayColumn,
-    pub char,
-    pub &'static str,
-    pub &'static str,
-    pub Constraint,
-);
+pub struct ViewDisplayColumn {
+    pub column: DisplayColumn,
+    pub key: char,
+    pub help: &'static str,
+    pub header: &'static str,
+    pub constraint: Constraint,
+}
 
 const VIEW_DISPLAY_COLUMNS: [ViewDisplayColumn; 7] = [
-    ViewDisplayColumn(
-        DisplayColumn::Pid,
-        'p',
-        "(p)id",
-        "pid",
-        Constraint::Length(6),
-    ),
-    ViewDisplayColumn(
-        DisplayColumn::ProcessName,
-        'n',
-        "process-(n)ame",
-        "process",
-        Constraint::Length(24),
-    ),
-    ViewDisplayColumn(
-        DisplayColumn::DiskRead,
-        'r',
-        "disk-(r)ead",
-        "dr",
-        Constraint::Length(5),
-    ),
-    ViewDisplayColumn(
-        DisplayColumn::DiskWrite,
-        'w',
-        "diks-(w)rite",
-        "dw",
-        Constraint::Length(5),
-    ),
-    ViewDisplayColumn(
-        DisplayColumn::Mem,
-        'm',
-        "(m)em",
-        "mem",
-        Constraint::Length(5),
-    ),
-    ViewDisplayColumn(
-        DisplayColumn::Cpu,
-        'c',
-        "(c)pu",
-        "cpu",
-        Constraint::Length(4),
-    ),
-    ViewDisplayColumn(
-        DisplayColumn::CpuHistory,
-        'h',
-        "cpu-(h)istory",
-        "cpu history",
-        Constraint::Percentage(100),
-    ),
+    ViewDisplayColumn {
+        column: DisplayColumn::Pid,
+        key: 'p',
+        help: "(p)id",
+        header: "pid",
+        constraint: Constraint::Length(6),
+    },
+    ViewDisplayColumn {
+        column: DisplayColumn::ProcessName,
+        key: 'n',
+        help: "process-(n)ame",
+        header: "process",
+        constraint: Constraint::Length(24),
+    },
+    ViewDisplayColumn {
+        column: DisplayColumn::DiskRead,
+        key: 'r',
+        help: "disk-(r)ead",
+        header: "dr",
+        constraint: Constraint::Length(5),
+    },
+    ViewDisplayColumn {
+        column: DisplayColumn::DiskWrite,
+        key: 'w',
+        help: "disk-(w)rite",
+        header: "dw",
+        constraint: Constraint::Length(5),
+    },
+    ViewDisplayColumn {
+        column: DisplayColumn::Mem,
+        key: 'm',
+        help: "(m)em",
+        header: "mem",
+        constraint: Constraint::Length(5),
+    },
+    ViewDisplayColumn {
+        column: DisplayColumn::Cpu,
+        key: 'c',
+        help: "(c)pu",
+        header: "cpu",
+        constraint: Constraint::Length(4),
+    },
+    ViewDisplayColumn {
+        column: DisplayColumn::CpuHistory,
+        key: 'h',
+        help: "cpu-(h)istory",
+        header: "cpu history",
+        constraint: Constraint::Percentage(100),
+    },
 ];
 
-// hmmm, maybe just map from DisplayColumn to bool?
-#[derive(Clone, Copy)]
-pub struct DisplayedColumns {
-    pid: bool,
-    process_name: bool,
-    disk_read: bool,
-    disk_write: bool,
-    mem: bool,
-    cpu: bool,
-    cpu_history: bool,
-}
+/// The set of columns currently shown. Iteration order always follows
+/// VIEW_DISPLAY_COLUMNS, so column order is stable regardless of toggles.
+#[derive(Clone)]
+pub struct DisplayedColumns(HashSet<DisplayColumn>);
 
 impl Default for DisplayedColumns {
     fn default() -> Self {
-        Self {
-            pid: true,
-            process_name: true,
-            disk_read: true,
-            disk_write: true,
-            mem: true,
-            cpu: true,
-            cpu_history: true,
-        }
+        // everything visible by default
+        Self(VIEW_DISPLAY_COLUMNS.iter().map(|c| c.column).collect())
     }
 }
 
 impl DisplayedColumns {
-    fn toggle(&mut self, col: &DisplayColumn) {
-        use DisplayColumn::*;
-        match col {
-            Pid => self.pid = !self.pid,
-            ProcessName => self.process_name = !self.process_name,
-            DiskRead => self.disk_read = !self.disk_read,
-            DiskWrite => self.disk_write = !self.disk_write,
-            Mem => self.mem = !self.mem,
-            Cpu => self.cpu = !self.cpu,
-            CpuHistory => self.cpu_history = !self.cpu_history,
+    fn toggle(&mut self, col: DisplayColumn) {
+        if !self.0.remove(&col) {
+            self.0.insert(col);
         }
     }
 
-    fn should_show(&self, col: &DisplayColumn) -> bool {
-        match col {
-            DisplayColumn::Pid => self.pid,
-            DisplayColumn::ProcessName => self.process_name,
-            DisplayColumn::DiskRead => self.disk_read,
-            DisplayColumn::DiskWrite => self.disk_write,
-            DisplayColumn::Mem => self.mem,
-            DisplayColumn::Cpu => self.cpu,
-            DisplayColumn::CpuHistory => self.cpu_history,
-        }
-    }
-
-    pub fn shown(&self) -> Vec<&ViewDisplayColumn> {
+    pub fn shown(&self) -> Vec<&'static ViewDisplayColumn> {
         VIEW_DISPLAY_COLUMNS
             .iter()
-            .filter(|ViewDisplayColumn(dc, _, _, _, _)| self.should_show(dc))
+            .filter(|c| self.0.contains(&c.column))
             .collect()
     }
 
     pub fn header(&self, sort_by: &SortColumn) -> Vec<String> {
-        VIEW_DISPLAY_COLUMNS
+        self.shown()
             .iter()
-            .filter_map(|ViewDisplayColumn(dc, _, _, h, _)| {
-                if self.should_show(dc) { Some(h) } else { None }.map(|h| {
-                    if sort_by == dc {
-                        format!("*{}*", h)
-                    } else {
-                        String::from(*h)
-                    }
-                })
+            .map(|c| {
+                if sort_by == &c.column {
+                    format!("*{}*", c.header)
+                } else {
+                    String::from(c.header)
+                }
             })
             .collect()
     }
@@ -311,15 +278,43 @@ impl SortColumn {
     }
 }
 
-struct ViewSortColumn(SortColumn, char, &'static str);
+struct ViewSortColumn {
+    column: SortColumn,
+    key: char,
+    help: &'static str,
+}
 
 const VIEW_SORT_COLUMNS: [ViewSortColumn; 6] = [
-    ViewSortColumn(SortColumn::Pid, 'p', "(p)id"),
-    ViewSortColumn(SortColumn::DiskRead, 'r', "disk-(r)ead"),
-    ViewSortColumn(SortColumn::DiskWrite, 'w', "disk-(w)rite"),
-    ViewSortColumn(SortColumn::DiskTotal, 'd', "(d)isk-total"),
-    ViewSortColumn(SortColumn::Mem, 'm', "(m)em"),
-    ViewSortColumn(SortColumn::Cpu, 'c', "(c)pu"),
+    ViewSortColumn {
+        column: SortColumn::Pid,
+        key: 'p',
+        help: "(p)id",
+    },
+    ViewSortColumn {
+        column: SortColumn::DiskRead,
+        key: 'r',
+        help: "disk-(r)ead",
+    },
+    ViewSortColumn {
+        column: SortColumn::DiskWrite,
+        key: 'w',
+        help: "disk-(w)rite",
+    },
+    ViewSortColumn {
+        column: SortColumn::DiskTotal,
+        key: 'd',
+        help: "(d)isk-total",
+    },
+    ViewSortColumn {
+        column: SortColumn::Mem,
+        key: 'm',
+        help: "(m)em",
+    },
+    ViewSortColumn {
+        column: SortColumn::Cpu,
+        key: 'c',
+        help: "(c)pu",
+    },
 ];
 
 #[derive(Default)]
