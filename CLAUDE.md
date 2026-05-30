@@ -58,6 +58,19 @@ pre-commit run --all-files     # Run pre-commit hooks (fmt, cargo-check, clippy)
 
 ## Recent Changes
 
+**2026-05-30: readability pass — stable order, flash, aggregate, core history**
+- **Stable list order**: `View::flat_rows` freezes the order and only re-sorts on
+  sort change or visible-set change; sort gained a pid tiebreak (kills HashMap
+  shuffle). Fixes the "rows jump every tick" problem.
+- **Flash new rows**: rows entering the visible set get a fading amber wash
+  (`note_new_rows`/`fade_flashes`, `FLASH_TICKS`).
+- **Sort arrow**: header shows ▾/▴ on the active column (replaces the `*..*`).
+- **Per-core history in header**: `SProcs.core_hist` + `SysSummary.cores`;
+  `view::core_lines` renders compact per-core sparklines, packed to width.
+- **Aggregate by name** (`a`): `SProc::aggregate` / `view::aggregate_by_name` fold
+  same-named procs into one summed synthetic row (histories summed element-wise,
+  id = lowest pid). Uses the flat path.
+
 **2026-05-30: user/state columns + richer detail view**
 - `SProc` gained `user`, `state` (char), `cmd`, `threads`, `run_secs` (and
   `parent` earlier). `SProc::new(p, user)` replaces the old `From<&Process>`;

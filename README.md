@@ -14,12 +14,16 @@ sparktop can!
   - can draw sparklines ▁▂▁▄▅▄
   - taller bars (`b`) give more vertical resolution; one full line = 100%, so
     multi-core (>100%) usage stacks visibly
-- [x] sortable, toggleable columns (pid, user, state, name, disk r/w, mem, cpu)
+- [x] sortable (with direction arrow), toggleable columns (pid, user, state, name, disk r/w, mem, cpu)
 - [x] numeric columns heat-shaded (green→red) by value, so high values pop
+- [x] stable row order (no jitter) — only re-sorts when the active set changes;
+  freshly-appeared rows briefly flash
 - [x] hide idle (low-cpu) processes by default
 - [x] name filter / search (`/`)
 - [x] process tree view (`t`), ordered by subtree totals
-- [x] system summary header (cpu, mem/swap, load, uptime, task count)
+- [x] aggregate same-named processes into one summed row (`a`)
+- [x] system summary header with compact per-core usage sparklines, plus
+  cpu, mem/swap, load, uptime, task count
 - [x] process **detail view** (`⏎`): identity (user, ppid, state, threads,
   run-time), full **cmdline**, and full-screen high-res braille charts of a
   process's cpu, memory and disk-i/o history
@@ -45,6 +49,7 @@ cargo run -- -d 0.5 -e 0.3 # custom refresh (s) and ewma weight (0..1)
 | `c`      | toggle which columns are shown                     |
 | `i`      | show/hide idle (low-cpu) processes                 |
 | `t`      | toggle process tree view                           |
+| `a`      | aggregate same-named processes into one row        |
 | `b`      | cycle bar height (1 → 2 → 3)                        |
 | `q` / `^C` | quit                                             |
 
