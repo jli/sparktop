@@ -37,7 +37,14 @@ pub struct View {
     flat_order: Vec<Pid>,
     flat_pids: HashSet<Pid>,
     last_sort: Option<(SortColumn, Dir)>,
+    /// pids shown last draw, to detect ones that just appeared.
+    seen: HashSet<Pid>,
+    /// ticks remaining to highlight a freshly-appeared row.
+    flash: HashMap<Pid, u8>,
 }
+
+/// How many draws a newly-appeared row stays highlighted.
+const FLASH_TICKS: u8 = 3;
 
 impl View {
     pub fn new(secs_per_sample: f64) -> Self {
@@ -217,6 +224,27 @@ impl View {
         self.order.iter().position(|&p| p == pid)
     }
 
+    /// Mark rows that just entered the visible set so they can flash. The first
+    /// population (startup) is not flashed.
+    fn note_new_rows(&mut self, current: &HashSet<Pid>) {
+        if !self.seen.is_empty() {
+            for &pid in current {
+                if !self.seen.contains(&pid) {
+                    self.flash.insert(pid, FLASH_TICKS);
+                }
+            }
+        }
+        self.seen = current.clone();
+    }
+
+    /// Age out the flash highlights by one draw.
+    fn fade_flashes(&mut self) {
+        self.flash.retain(|_, n| {
+            *n = n.saturating_sub(1);
+            *n > 0
+        });
+    }
+
     pub fn draw(
         &mut self,
         terminal: &mut DefaultTerminal,
@@ -224,6 +252,8 @@ impl View {
         sprocs: &[&SProc],
     ) -> Result<()> {
         let mut procs = self.visible(sprocs);
+        let current_pids: HashSet<Pid> = procs.iter().map(|p| p.pid).collect();
+        self.note_new_rows(&current_pids);
         // rows carry a tree depth (0 in flat mode) for name indentation
         let rows: Vec<(&SProc, u16)> = if self.state.tree {
             self.tree_rows(&procs)
@@ -249,6 +279,7 @@ impl View {
         let bar_height = self.state.bar_height;
         let secs_per_sample = self.secs_per_sample;
         let summary_line = summary_line(summary);
+        let flash: HashSet<Pid> = self.flash.keys().copied().collect();
         let table_state = &mut self.table_state;
         terminal.draw(|f| {
             let full = f.area();
@@ -285,6 +316,7 @@ impl View {
                     &display_columns,
                     &constraints,
                     bar_height,
+                    &flash,
                 );
                 f.render_stateful_widget(proc_table, main, table_state);
             }
@@ -299,6 +331,7 @@ impl View {
                 footer_area,
             );
         })?;
+        self.fade_flashes();
         Ok(())
     }
 }
@@ -425,6 +458,7 @@ impl ProcTable {
         display_columns: &DisplayedColumns,
         constraints: &'a [Constraint],
         bar_height: u16,
+        flash: &HashSet<Pid>,
     ) -> Table<'a> {
         use DisplayColumn::*;
 
@@ -480,7 +514,12 @@ impl ProcTable {
                     Cell::from(Text::from(lines))
                 }
             });
-            Row::new(values).height(bar_height)
+            let mut row = Row::new(values).height(bar_height);
+            if flash.contains(&sp.pid) {
+                // freshly-appeared row: amber wash that fades over a few ticks
+                row = row.style(Style::default().bg(Color::Rgb(80, 70, 20)));
+            }
+            row
         });
 
         Table::new(rows, constraints.iter().copied())
@@ -623,6 +662,31 @@ mod tests {
         assert_eq!(indent_name("x", 0), "x");
         assert_eq!(indent_name("x", 1), "↳ x");
         assert_eq!(indent_name("x", 2), "  ↳ x");
+    }
+
+    #[test]
+    fn new_rows_flash_then_fade() {
+        let pids = |ids: &[u32]| {
+            ids.iter()
+                .map(|&i| Pid::from(i as usize))
+                .collect::<HashSet<_>>()
+        };
+        let mut v = View::default();
+
+        v.note_new_rows(&pids(&[1, 2]));
+        assert!(v.flash.is_empty(), "first population doesn't flash");
+
+        v.note_new_rows(&pids(&[1, 2, 3]));
+        assert!(v.flash.contains_key(&Pid::from(3usize)), "new pid flashes");
+        assert!(
+            !v.flash.contains_key(&Pid::from(1usize)),
+            "existing pid doesn't"
+        );
+
+        for _ in 0..FLASH_TICKS {
+            v.fade_flashes();
+        }
+        assert!(v.flash.is_empty(), "flash fades after FLASH_TICKS");
     }
 
     #[test]
