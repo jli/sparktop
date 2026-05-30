@@ -23,6 +23,10 @@ pub struct ViewState {
     pub hide_idle: bool,
     /// Rows per process in the list, for taller (higher-res) cpu sparklines.
     pub bar_height: u16,
+    /// Case-insensitive substring the process name must contain (empty = off).
+    pub filter: String,
+    /// True while the user is typing into the filter (keys go to the buffer).
+    pub filtering: bool,
     pub should_quit: bool,
     action: Action,
 }
@@ -37,6 +41,8 @@ impl Default for ViewState {
             show_detail: false,
             hide_idle: true,
             bar_height: 1,
+            filter: String::new(),
+            filtering: false,
             should_quit: false,
             action: Action::default(),
         }
@@ -87,14 +93,23 @@ impl ViewState {
     }
 
     pub fn footer(&self) -> String {
+        if self.filtering {
+            return format!("/{}\u{2588}   esc:clear  ⏎:apply", self.filter);
+        }
         if self.show_detail {
             return String::from("esc back  ↑↓ prev/next process  q quit");
         }
         match &self.action {
-            Action::Top => format!(
-                "{}  (i)dle (b)ars  ↑↓ select  ⏎ details  q quit",
-                Action::action_help()
-            ),
+            Action::Top => {
+                let mut f = format!(
+                    "(/)filter  {}  (i)dle (b)ars  ↑↓ select  ⏎ details  q quit",
+                    Action::action_help()
+                );
+                if !self.filter.is_empty() {
+                    f = format!("[filter: {}]  {}", self.filter, f);
+                }
+                f
+            }
             Action::SelectSort => format!("{}  (repeat to reverse)", Action::sort_col_help()),
             Action::ToggleColumn => Action::display_col_help(),
         }

@@ -49,9 +49,18 @@ impl View {
         });
     }
 
-    /// The processes to actually display: all of them, or (when hide_idle is on)
-    /// just the CPU-active ones, always keeping the selected process visible.
+    /// The processes to actually display. A name filter (if set) takes
+    /// precedence and shows every match; otherwise hide_idle drops near-idle
+    /// processes (always keeping the selected one visible).
     fn visible<'a>(&self, sprocs: &[&'a SProc]) -> Vec<&'a SProc> {
+        if !self.state.filter.is_empty() {
+            let needle = self.state.filter.to_lowercase();
+            return sprocs
+                .iter()
+                .copied()
+                .filter(|sp| sp.name.to_lowercase().contains(&needle))
+                .collect();
+        }
         sprocs
             .iter()
             .copied()
@@ -77,7 +86,27 @@ impl View {
             }
             return self.state.should_quit;
         }
+        // Filter input mode: keystrokes edit the filter text; arrows still move
+        // the selection through the (live-filtered) list.
+        if self.state.filtering {
+            match key.code {
+                KeyCode::Esc => {
+                    self.state.filter.clear();
+                    self.state.filtering = false;
+                }
+                KeyCode::Enter => self.state.filtering = false,
+                KeyCode::Backspace => {
+                    self.state.filter.pop();
+                }
+                KeyCode::Char(c) => self.state.filter.push(c),
+                KeyCode::Up => self.move_selection(-1),
+                KeyCode::Down => self.move_selection(1),
+                _ => {}
+            }
+            return false;
+        }
         match key.code {
+            KeyCode::Char('/') if self.state.is_top() => self.state.filtering = true,
             KeyCode::Up if self.state.is_top() => self.move_selection(-1),
             KeyCode::Down if self.state.is_top() => self.move_selection(1),
             KeyCode::Enter if self.state.is_top() && self.state.selected.is_some() => {
@@ -255,6 +284,46 @@ mod tests {
         let mut sp = SProc::blank(pid, "p");
         sp.cpu_ewma = cpu;
         sp
+    }
+
+    fn key(c: char) -> KeyEvent {
+        KeyEvent::new(
+            KeyCode::Char(c),
+            ratatui::crossterm::event::KeyModifiers::NONE,
+        )
+    }
+    fn keycode(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, ratatui::crossterm::event::KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn filter_matches_name_substring_case_insensitive() {
+        let a = SProc::blank(1, "Firefox");
+        let b = SProc::blank(2, "bash");
+        let c = SProc::blank(3, "firefox-helper");
+        let all = vec![&a, &b, &c];
+        let mut v = View::default();
+        v.state.filter = "fire".into();
+        let vis = v.visible(&all);
+        assert_eq!(vis.len(), 2);
+        assert!(vis.iter().all(|s| s.name.to_lowercase().contains("fire")));
+    }
+
+    #[test]
+    fn slash_starts_filter_typing_builds_it_esc_clears() {
+        let mut v = View::default();
+        v.handle_key(key('/'));
+        assert!(v.state.filtering);
+        v.handle_key(key('f'));
+        v.handle_key(key('o'));
+        assert_eq!(v.state.filter, "fo");
+        v.handle_key(keycode(KeyCode::Enter)); // apply: keep text, leave input
+        assert!(!v.state.filtering);
+        assert_eq!(v.state.filter, "fo");
+        v.handle_key(key('/'));
+        v.handle_key(keycode(KeyCode::Esc)); // clear
+        assert!(!v.state.filtering);
+        assert_eq!(v.state.filter, "");
     }
 
     #[test]
