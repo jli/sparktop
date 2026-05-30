@@ -242,6 +242,7 @@ impl View {
 
         // erhm, borrow checker workarounds...
         let sort_by = self.state.sort_by;
+        let sort_dir = self.state.sort_dir;
         let display_columns = self.state.displayed_columns.clone();
         let footer = self.state.footer();
         let show_detail = self.state.show_detail;
@@ -277,8 +278,14 @@ impl View {
                     .map(|c| c.constraint)
                     .collect();
 
-                let proc_table =
-                    ProcTable::build(&rows, sort_by, &display_columns, &constraints, bar_height);
+                let proc_table = ProcTable::build(
+                    &rows,
+                    sort_by,
+                    sort_dir,
+                    &display_columns,
+                    &constraints,
+                    bar_height,
+                );
                 f.render_stateful_widget(proc_table, main, table_state);
             }
 
@@ -414,13 +421,14 @@ impl ProcTable {
     fn build<'a>(
         rows_data: &'a [(&'a SProc, u16)],
         sort_by: SortColumn,
+        sort_dir: Dir,
         display_columns: &DisplayedColumns,
         constraints: &'a [Constraint],
         bar_height: u16,
     ) -> Table<'a> {
         use DisplayColumn::*;
 
-        let header = display_columns.header(&sort_by);
+        let header = display_columns.header(&sort_by, sort_dir);
         let vdcols = display_columns.shown();
 
         // per-column maxima (over visible procs) so each numeric column can be

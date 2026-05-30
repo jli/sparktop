@@ -297,12 +297,16 @@ impl DisplayedColumns {
             .collect()
     }
 
-    pub fn header(&self, sort_by: &SortColumn) -> Vec<String> {
+    pub fn header(&self, sort_by: &SortColumn, dir: Dir) -> Vec<String> {
         self.shown()
             .iter()
             .map(|c| {
                 if sort_by == &c.column {
-                    format!("*{}*", c.header)
+                    let arrow = match dir {
+                        Dir::Desc => '▾',
+                        Dir::Asc => '▴',
+                    };
+                    format!("{}{}", c.header, arrow)
                 } else {
                     String::from(c.header)
                 }
@@ -465,9 +469,11 @@ mod tests {
 
     #[test]
     fn user_and_state_columns_shown_by_default() {
-        let headers = DisplayedColumns::default().header(&SortColumn::Cpu);
+        let headers = DisplayedColumns::default().header(&SortColumn::Cpu, Dir::Desc);
         assert!(headers.iter().any(|h| h == "user"));
         assert!(headers.iter().any(|h| h == "st"));
+        // the sorted column carries a direction arrow
+        assert!(headers.iter().any(|h| h == "cpu▾"));
     }
 
     #[test]
