@@ -8,7 +8,7 @@
 //                         time:   [29.911 ms 30.100 ms 30.328 ms]
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use sysinfo::{System, SystemExt};
+use sysinfo::System;
 
 fn refresh_all(n: u64) {
     let mut sys = System::new_all();

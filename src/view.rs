@@ -1,19 +1,18 @@
 /// View: rendering the UI, interactions.
 use anyhow::Result;
-use crossterm::event::KeyEvent;
 use ordered_float::OrderedFloat as OrdFloat;
-use tui::{
+use ratatui::{
+    crossterm::event::KeyEvent,
     layout::{Alignment, Constraint, Layout},
     style::{Color, Modifier, Style},
-    text::{Span, Spans},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Row, Table},
+    DefaultTerminal,
 };
 
 use crate::{
-    event::Next,
     render,
     sproc::SProc,
-    sterm::STerm,
     view_state::{
         render_metric, Dir, DisplayColumn, DisplayedColumns, SortColumn, ViewDisplayColumn,
         ViewState,
@@ -22,12 +21,11 @@ use crate::{
 
 #[derive(Default)]
 pub struct View {
-    terminal: STerm,
     state: ViewState,
 }
 
 impl View {
-    fn sort(&self, sprocs: &mut Vec<&SProc>) {
+    fn sort(&self, sprocs: &mut [&SProc]) {
         sprocs.sort_by_key(|&sp| {
             let val = self.state.sort_by.from_sproc(sp);
             match self.state.sort_dir {
@@ -37,71 +35,46 @@ impl View {
         });
     }
 
-    // ViewState + KeyEvent -> Option<Action>
-    // ViewState + Action -> ViewState
-    pub fn handle_key(&mut self, key: KeyEvent) -> Next {
+    /// Handle a key press, returning true if the app should quit.
+    pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         self.state.handle_key(key);
-        if self.state.should_quit {
-            Next::Quit
-        } else {
-            Next::Continue
-        }
+        self.state.should_quit
     }
 
-    pub fn draw(&mut self, sprocs: &mut Vec<&SProc>) -> Result<()> {
+    pub fn draw(&mut self, terminal: &mut DefaultTerminal, sprocs: &mut [&SProc]) -> Result<()> {
         self.sort(sprocs);
         // erhm, borrow checker workarounds...
         let alert = self.state.alert.clone();
         let sort_by = self.state.sort_by;
         let display_columns = self.state.displayed_columns;
         let footer = self.state.footer();
-        self.terminal.draw(|f| {
-            let full = f.size();
+        terminal.draw(|f| {
+            let full = f.area();
             let main_constraints = if alert.is_some() {
                 vec![
-                    Constraint::Length(full.height - 4),
+                    Constraint::Length(full.height.saturating_sub(4)),
                     Constraint::Length(3),
                     Constraint::Length(1),
                 ]
             } else {
-                vec![Constraint::Length(full.height - 1), Constraint::Length(1)]
+                vec![
+                    Constraint::Length(full.height.saturating_sub(1)),
+                    Constraint::Length(1),
+                ]
             };
             let rects = Layout::default().constraints(main_constraints).split(full);
 
             // Draw process list.
             let table_area = rects[0];
-            // let proc_table = ProcTable::new(sprocs, sort_by, display_columns);
             // need to create constraints here bc the table doesn't take
             // ownership and would be dropping it at the end.
-            let vdcols = display_columns.shown();
-            let constraints: Vec<Constraint> = vdcols
+            let constraints: Vec<Constraint> = display_columns
+                .shown()
                 .iter()
-                .map(|ViewDisplayColumn(_, _, _, _, constraint)| constraint)
-                .copied()
+                .map(|ViewDisplayColumn(_, _, _, _, constraint)| *constraint)
                 .collect();
 
-            // Calculate available width for CpuHistory column
-            let fixed_width: u16 = vdcols
-                .iter()
-                .filter(|ViewDisplayColumn(dc, _, _, _, _)| {
-                    !matches!(dc, DisplayColumn::CpuHistory)
-                })
-                .map(
-                    |ViewDisplayColumn(_, _, _, _, constraint)| match constraint {
-                        Constraint::Length(n) => *n,
-                        _ => 0,
-                    },
-                )
-                .sum();
-            let cpu_hist_width = (table_area.width.saturating_sub(fixed_width) as usize).max(3);
-
-            let proc_table = ProcTable::build(
-                sprocs,
-                sort_by,
-                display_columns,
-                &constraints,
-                cpu_hist_width,
-            );
+            let proc_table = ProcTable::build(sprocs, sort_by, display_columns, &constraints);
             f.render_widget(proc_table, table_area);
 
             // Draw alert.
@@ -125,11 +98,6 @@ impl View {
     }
 }
 
-// struct ProcTable<'a> {
-//     header: Vec<String>,
-//     sprocs: &'a [&'a SProc],
-// }
-// TODO: make this a Widget
 struct ProcTable();
 
 impl ProcTable {
@@ -138,44 +106,11 @@ impl ProcTable {
         sort_by: SortColumn,
         display_columns: DisplayedColumns,
         constraints: &'a [Constraint],
-        cpu_hist_width: usize,
-    ) -> impl tui::widgets::Widget + 'a {
+    ) -> Table<'a> {
         use DisplayColumn::*;
 
-        // Get compression scheme for visual markers
-        let compression_markers = if !sprocs.is_empty() && cpu_hist_width > 0 {
-            let max_hist_len = sprocs.iter().map(|sp| sp.cpu_hist.len()).max().unwrap_or(0);
-            if max_hist_len > 0 {
-                let longest = sprocs
-                    .iter()
-                    .find(|sp| sp.cpu_hist.len() == max_hist_len)
-                    .unwrap();
-                let (_, scheme) = render::compress_history(&longest.cpu_hist, cpu_hist_width);
-                scheme.visual_markers()
-            } else {
-                vec![]
-            }
-        } else {
-            vec![]
-        };
-
-        // Build header row with visual markers for cpu history
         let header = display_columns.header(&sort_by);
         let vdcols = display_columns.shown();
-        let cpu_hist_pos = vdcols
-            .iter()
-            .position(|ViewDisplayColumn(dc, _, _, _, _)| matches!(dc, CpuHistory));
-        let header_spans: Vec<Spans> = header
-            .into_iter()
-            .enumerate()
-            .map(|(i, text)| {
-                if Some(i) == cpu_hist_pos {
-                    Spans::from(compression_markers.clone())
-                } else {
-                    Spans::from(text)
-                }
-            })
-            .collect();
 
         let rows = sprocs.iter().map(|sp| {
             let mut liveness_style = Style::default();
@@ -185,31 +120,26 @@ impl ProcTable {
             let values = vdcols
                 .iter()
                 .map(|ViewDisplayColumn(c, _, _, _, _)| match c {
-                    Pid => Spans::from(Span::styled(sp.pid.to_string(), liveness_style)),
-                    ProcessName => Spans::from(Span::styled(sp.name.clone(), liveness_style)),
-                    DiskRead => Spans::from(Span::from(render_metric(sp.disk_read_ewma))),
-                    DiskWrite => Spans::from(Span::from(render_metric(sp.disk_write_ewma))),
-                    Mem => Spans::from(Span::from(render_metric(sp.mem_mb))),
+                    Pid => Line::from(Span::styled(sp.pid.to_string(), liveness_style)),
+                    ProcessName => Line::from(Span::styled(sp.name.clone(), liveness_style)),
+                    DiskRead => Line::from(render_metric(sp.disk_read_ewma)),
+                    DiskWrite => Line::from(render_metric(sp.disk_write_ewma)),
+                    Mem => Line::from(render_metric(sp.mem_mb)),
                     Cpu => {
                         let text = render_metric(sp.cpu_ewma);
-                        if let Some(color) = render::cpu_color(sp.cpu_ewma) {
-                            Spans::from(Span::styled(text, Style::default().fg(color)))
-                        } else {
-                            Spans::from(Span::from(text))
+                        match render::cpu_color(sp.cpu_ewma) {
+                            Some(color) => {
+                                Line::from(Span::styled(text, Style::default().fg(color)))
+                            }
+                            None => Line::from(text),
                         }
                     }
-                    CpuHistory => {
-                        let (compressed, _) =
-                            render::compress_history(&sp.cpu_hist, cpu_hist_width);
-                        Spans::from(render::render_vec_colored(compressed, 100.))
-                    }
+                    CpuHistory => Line::from(render::render_vec_colored(&sp.cpu_hist, 100.)),
                 });
             Row::new(values)
         });
-        Table::new(rows)
-            .header(
-                Row::new(header_spans).style(Style::default().add_modifier(Modifier::UNDERLINED)),
-            )
-            .widths(constraints)
+
+        Table::new(rows, constraints.iter().copied())
+            .header(Row::new(header).style(Style::default().add_modifier(Modifier::UNDERLINED)))
     }
 }

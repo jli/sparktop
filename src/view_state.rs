@@ -1,7 +1,7 @@
 /// ViewState: view model and interactions.
 // rendering is done in view.rs
-use crossterm::event::{KeyCode, KeyEvent};
-use tui::layout::Constraint;
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::layout::Constraint;
 
 use crate::sproc::SProc;
 
@@ -10,8 +10,6 @@ pub struct ViewState {
     pub sort_by: SortColumn,
     pub sort_dir: Dir,
     pub displayed_columns: DisplayedColumns,
-    pub selected: Option<i32>,
-    pub zoom_selected: bool,
     pub alert: Option<String>,
     pub should_quit: bool,
     action: Action,
@@ -20,35 +18,29 @@ pub struct ViewState {
 impl ViewState {
     pub fn handle_key(&mut self, key_event: KeyEvent) {
         use Action::*;
-        let mut unhandled = false;
+        // Unrecognized keys are silently ignored; the footer already advertises
+        // what's available in the current mode.
         match (&self.action, key_event.code) {
             (_, KeyCode::Esc) => self.action = Top,
             (&Top, KeyCode::Char('q')) => self.should_quit = true,
-            (&Top, KeyCode::Char(c)) => match Action::action_from_char(c) {
-                Some(a) => self.action = a,
-                None => unhandled = true,
-            },
-            (&SelectSort, KeyCode::Char(c)) => match Action::sort_col_from_char(c) {
-                Some(col) => {
+            (&Top, KeyCode::Char(c)) => {
+                if let Some(a) = Action::action_from_char(c) {
+                    self.action = a;
+                }
+            }
+            (&SelectSort, KeyCode::Char(c)) => {
+                if let Some(col) = Action::sort_col_from_char(c) {
                     self.sort_by = col;
                     self.action = Top;
                 }
-                None => unhandled = true,
-            },
-            (&ToggleColumn, KeyCode::Char(c)) => match Action::display_col_from_char(c) {
-                Some(col) => {
+            }
+            (&ToggleColumn, KeyCode::Char(c)) => {
+                if let Some(col) = Action::display_col_from_char(c) {
                     self.displayed_columns.toggle(&col);
                     self.action = Top;
                 }
-                None => unhandled = true,
-            },
-            _ => unhandled = true,
-        };
-
-        self.alert = if unhandled {
-            Some(format!("unhandled key: {:?}", key_event))
-        } else {
-            None
+            }
+            _ => {}
         };
     }
 
