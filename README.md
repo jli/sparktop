@@ -15,6 +15,7 @@ sparktop can!
   - taller bars (`b`) give more vertical resolution; one full line = 100%, so
     multi-core (>100%) usage stacks visibly
 - [x] sortable, toggleable columns
+- [x] numeric columns heat-shaded (green→red) by value, so high values pop
 - [x] hide idle (low-cpu) processes by default
 - [x] process **detail view** (`⏎`): full-screen high-res braille charts of a
   process's cpu, memory and disk-i/o history
