@@ -1,14 +1,19 @@
 /// SProcs: a collection of all processes on the system.
-use std::collections::{hash_map::Values, HashMap};
+use std::collections::{hash_map::Values, HashMap, VecDeque};
 
 use sysinfo::{Pid, System, Users};
 
 use crate::sproc::{DeadStatus, SProc};
 
+/// Samples of recent per-core usage kept for the header sparklines.
+const CORE_HIST_LEN: usize = 16;
+
 pub struct SProcs {
     sys: System,
     users: Users,
     sprocs: HashMap<Pid, SProc>,
+    /// recent usage per logical core (newest first), for the header.
+    core_hist: Vec<VecDeque<f64>>,
 }
 
 /// A snapshot of system-wide stats for the summary header.
@@ -21,6 +26,8 @@ pub struct SysSummary {
     pub load: (f64, f64, f64),
     pub uptime: u64,
     pub tasks: usize,
+    /// recent usage per core, oldest-to-newest, for compact sparklines.
+    pub cores: Vec<Vec<f64>>,
 }
 
 impl Default for SProcs {
@@ -29,6 +36,7 @@ impl Default for SProcs {
             sys: System::new_all(),
             users: Users::new_with_refreshed_list(),
             sprocs: HashMap::default(),
+            core_hist: Vec::new(),
         }
     }
 }
@@ -41,6 +49,17 @@ impl SProcs {
         // and bust readings.
         self.sys.refresh_cpu();
         self.sys.refresh_memory();
+
+        // record per-core usage history for the header sparklines
+        let cpus = self.sys.cpus();
+        if self.core_hist.len() != cpus.len() {
+            self.core_hist = vec![VecDeque::new(); cpus.len()];
+        }
+        for (hist, cpu) in self.core_hist.iter_mut().zip(cpus) {
+            hist.push_front(cpu.cpu_usage() as f64);
+            hist.truncate(CORE_HIST_LEN);
+        }
+
         self.sys.refresh_processes();
         let users = &self.users;
         let latest_procs = self.sys.processes();
@@ -95,6 +114,12 @@ impl SProcs {
             load: (la.one, la.five, la.fifteen),
             uptime: System::uptime(),
             tasks: self.sys.processes().len(),
+            // newest-first internally; reverse to oldest->newest for display
+            cores: self
+                .core_hist
+                .iter()
+                .map(|h| h.iter().rev().copied().collect())
+                .collect(),
         }
     }
 }

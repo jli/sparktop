@@ -279,21 +279,26 @@ impl View {
         let bar_height = self.state.bar_height;
         let secs_per_sample = self.secs_per_sample;
         let summary_line = summary_line(summary);
+        let cores = &summary.cores;
         let flash: HashSet<Pid> = self.flash.keys().copied().collect();
         let table_state = &mut self.table_state;
         terminal.draw(|f| {
             let full = f.area();
-            // summary header (1) + main area + footer (1)
+            // summary header (1) + per-core sparklines + main area + footer (1)
+            let core_lines = core_lines(cores, full.width);
+            let core_h = core_lines.len() as u16;
             let rects = Layout::default()
                 .constraints([
                     Constraint::Length(1),
-                    Constraint::Length(full.height.saturating_sub(2)),
+                    Constraint::Length(core_h),
+                    Constraint::Length(full.height.saturating_sub(2 + core_h)),
                     Constraint::Length(1),
                 ])
                 .split(full);
             f.render_widget(Paragraph::new(summary_line), rects[0]);
-            let main = rects[1];
-            let footer_area = rects[2];
+            f.render_widget(Paragraph::new(core_lines), rects[1]);
+            let main = rects[2];
+            let footer_area = rects[3];
 
             if show_detail {
                 if let Some(sp) = selected_index.map(|i| rows[i].0) {
@@ -435,6 +440,43 @@ fn indent_name(name: &str, depth: u16) -> String {
     }
 }
 
+/// Compact per-core usage sparklines for the header: "0 ▁▂▃ 1 ▅▆▇ ...",
+/// each core colored by load, packed as many per row as the width allows.
+fn core_lines(cores: &[Vec<f64>], width: u16) -> Vec<Line<'static>> {
+    if cores.is_empty() {
+        return Vec::new();
+    }
+    let spark_len = cores.iter().map(|c| c.len()).max().unwrap_or(0);
+    let label_w = (cores.len().saturating_sub(1)).to_string().len();
+    let cell_w = label_w + 1 + spark_len + 1; // "N " + spark + gap
+    let per_row = (width as usize / cell_w.max(1)).max(1);
+
+    let cells: Vec<Vec<Span>> = cores
+        .iter()
+        .enumerate()
+        .map(|(i, samples)| {
+            let mut cell = vec![Span::styled(
+                format!("{i:>label_w$} "),
+                Style::default().fg(Color::DarkGray),
+            )];
+            for &v in samples {
+                let frac = (v / 100.0).clamp(0.0, 1.0);
+                cell.push(Span::styled(
+                    render::float_bar(frac).to_string(),
+                    Style::default().fg(render::heat(frac)),
+                ));
+            }
+            cell.push(Span::raw(" "));
+            cell
+        })
+        .collect();
+
+    cells
+        .chunks(per_row)
+        .map(|chunk| Line::from(chunk.iter().flatten().cloned().collect::<Vec<_>>()))
+        .collect()
+}
+
 /// A numeric cell shaded by where `val` falls in [0, max] (green->red). Dead
 /// processes and near-zero values ("_") are left unshaded so they recede.
 fn heat_cell(text: String, val: f64, max: f64, sp: &SProc) -> Cell<'static> {
@@ -549,6 +591,14 @@ mod tests {
     }
 
     #[test]
+    fn core_lines_pack_to_width() {
+        let cores = vec![vec![10.0, 50.0, 100.0], vec![0.0, 0.0, 0.0]];
+        assert_eq!(core_lines(&cores, 200).len(), 1); // wide: both on one row
+        assert_eq!(core_lines(&cores, 8).len(), 2); // narrow: one core per row
+        assert!(core_lines(&[], 80).is_empty());
+    }
+
+    #[test]
     fn summary_line_includes_key_stats_and_hides_zero_swap() {
         let s = SysSummary {
             cpu_pct: 42.0,
@@ -559,6 +609,7 @@ mod tests {
             load: (1.0, 2.0, 3.0),
             uptime: 90_061, // 1d 1h 1m
             tasks: 123,
+            cores: vec![],
         };
         let text: String = summary_line(&s)
             .spans

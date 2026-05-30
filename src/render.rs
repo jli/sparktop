@@ -139,7 +139,7 @@ pub fn cpu_color(cpu: f64) -> Option<Color> {
 const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 // f must be between 0 and 1.
-fn float_bar(mut f: f64) -> char {
+pub fn float_bar(mut f: f64) -> char {
     f = f.min(1.); // cpu usage can be > 1. do something special?
     if f < 0.03 {
         return ' ';
