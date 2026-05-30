@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Constraint;
+use sysinfo::Pid;
 
 use crate::sproc::SProc;
 
@@ -12,6 +13,8 @@ pub struct ViewState {
     pub sort_by: SortColumn,
     pub sort_dir: Dir,
     pub displayed_columns: DisplayedColumns,
+    /// Currently-selected process, tracked by pid so it survives re-sorts.
+    pub selected: Option<Pid>,
     pub should_quit: bool,
     action: Action,
 }
@@ -45,9 +48,13 @@ impl ViewState {
         };
     }
 
+    pub fn is_top(&self) -> bool {
+        self.action == Action::Top
+    }
+
     pub fn footer(&self) -> String {
         match &self.action {
-            Action::Top => Action::action_help(),
+            Action::Top => format!("{}  ↑↓ select  q quit", Action::action_help()),
             Action::SelectSort => Action::sort_col_help(),
             Action::ToggleColumn => Action::display_col_help(),
         }

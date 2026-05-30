@@ -2,13 +2,14 @@
 use anyhow::Result;
 use ordered_float::OrderedFloat as OrdFloat;
 use ratatui::{
-    crossterm::event::KeyEvent,
+    crossterm::event::{KeyCode, KeyEvent},
     layout::{Alignment, Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Row, Table},
+    widgets::{Paragraph, Row, Table, TableState},
     DefaultTerminal,
 };
+use sysinfo::Pid;
 
 use crate::{
     render,
@@ -19,6 +20,10 @@ use crate::{
 #[derive(Default)]
 pub struct View {
     state: ViewState,
+    /// pids in current display order, refreshed each draw; used to translate
+    /// up/down navigation into a concrete selected pid.
+    order: Vec<Pid>,
+    table_state: TableState,
 }
 
 impl View {
@@ -34,16 +39,46 @@ impl View {
 
     /// Handle a key press, returning true if the app should quit.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
-        self.state.handle_key(key);
+        match key.code {
+            KeyCode::Up if self.state.is_top() => self.move_selection(-1),
+            KeyCode::Down if self.state.is_top() => self.move_selection(1),
+            _ => self.state.handle_key(key),
+        }
         self.state.should_quit
+    }
+
+    /// Move the selection by `delta` rows within the current display order,
+    /// clamping at the ends. The first move from no selection lands on the top.
+    fn move_selection(&mut self, delta: i32) {
+        if self.order.is_empty() {
+            return;
+        }
+        let last = self.order.len() as i32 - 1;
+        let next = match self.selected_index() {
+            None => 0,
+            Some(i) => (i as i32 + delta).clamp(0, last),
+        };
+        self.state.selected = Some(self.order[next as usize]);
+    }
+
+    fn selected_index(&self) -> Option<usize> {
+        let pid = self.state.selected?;
+        self.order.iter().position(|&p| p == pid)
     }
 
     pub fn draw(&mut self, terminal: &mut DefaultTerminal, sprocs: &mut [&SProc]) -> Result<()> {
         self.sort(sprocs);
+        self.order = sprocs.iter().map(|sp| sp.pid).collect();
+        // keep the highlighted row in sync with the selected pid (and let
+        // TableState scroll to keep it visible)
+        let selected_index = self.selected_index();
+        self.table_state.select(selected_index);
+
         // erhm, borrow checker workarounds...
         let sort_by = self.state.sort_by;
         let display_columns = self.state.displayed_columns.clone();
         let footer = self.state.footer();
+        let table_state = &mut self.table_state;
         terminal.draw(|f| {
             let full = f.area();
             let rects = Layout::default()
@@ -63,7 +98,7 @@ impl View {
                 .collect();
 
             let proc_table = ProcTable::build(sprocs, sort_by, &display_columns, &constraints);
-            f.render_widget(proc_table, rects[0]);
+            f.render_stateful_widget(proc_table, rects[0], table_state);
 
             // Draw help footer.
             f.render_widget(
@@ -118,5 +153,6 @@ impl ProcTable {
 
         Table::new(rows, constraints.iter().copied())
             .header(Row::new(header).style(Style::default().add_modifier(Modifier::UNDERLINED)))
+            .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
     }
 }
