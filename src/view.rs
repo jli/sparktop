@@ -91,8 +91,9 @@ impl View {
     }
 
     /// The processes to actually display. A name filter (if set) takes
-    /// precedence and shows every match; otherwise hide_idle drops near-idle
-    /// processes (always keeping the selected one visible).
+    /// precedence and shows every match. Otherwise tree mode shows the whole
+    /// hierarchy (idle parents included, or the tree would collapse), while the
+    /// flat list applies hide_idle (always keeping the selected one visible).
     fn visible<'a>(&self, sprocs: &[&'a SProc]) -> Vec<&'a SProc> {
         if !self.state.filter.is_empty() {
             let needle = self.state.filter.to_lowercase();
@@ -101,6 +102,9 @@ impl View {
                 .copied()
                 .filter(|sp| sp.name.to_lowercase().contains(&needle))
                 .collect();
+        }
+        if self.state.tree {
+            return sprocs.to_vec();
         }
         sprocs
             .iter()
@@ -842,5 +846,15 @@ mod tests {
         // toggling hide_idle off shows everything
         view.state.hide_idle = false;
         assert_eq!(view.visible(&all).len(), 3);
+    }
+
+    #[test]
+    fn tree_mode_keeps_idle_parents_visible() {
+        let init = SProc::blank(1, "init"); // cpu 0 -> idle
+        let all = vec![&init];
+        let mut v = View::default(); // hide_idle on, flat
+        assert_eq!(v.visible(&all).len(), 0, "idle hidden in flat list");
+        v.state.tree = true;
+        assert_eq!(v.visible(&all).len(), 1, "tree keeps idle parents");
     }
 }
