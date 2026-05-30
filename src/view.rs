@@ -16,6 +16,7 @@ use crate::{
     sproc::SProc,
     view_state::{
         render_bytes, render_metric, Dir, DisplayColumn, DisplayedColumns, SortColumn, ViewState,
+        IDLE_CPU_PCT,
     },
 };
 
@@ -46,6 +47,20 @@ impl View {
                 Dir::Desc => OrdFloat(-val),
             }
         });
+    }
+
+    /// The processes to actually display: all of them, or (when hide_idle is on)
+    /// just the CPU-active ones, always keeping the selected process visible.
+    fn visible<'a>(&self, sprocs: &[&'a SProc]) -> Vec<&'a SProc> {
+        sprocs
+            .iter()
+            .copied()
+            .filter(|sp| {
+                !self.state.hide_idle
+                    || sp.cpu_ewma >= IDLE_CPU_PCT
+                    || self.state.selected == Some(sp.pid)
+            })
+            .collect()
     }
 
     /// Handle a key press, returning true if the app should quit.
@@ -92,9 +107,10 @@ impl View {
         self.order.iter().position(|&p| p == pid)
     }
 
-    pub fn draw(&mut self, terminal: &mut DefaultTerminal, sprocs: &mut [&SProc]) -> Result<()> {
-        self.sort(sprocs);
-        self.order = sprocs.iter().map(|sp| sp.pid).collect();
+    pub fn draw(&mut self, terminal: &mut DefaultTerminal, sprocs: &[&SProc]) -> Result<()> {
+        let mut procs = self.visible(sprocs);
+        self.sort(&mut procs);
+        self.order = procs.iter().map(|sp| sp.pid).collect();
         // keep the highlighted row in sync with the selected pid (and let
         // TableState scroll to keep it visible)
         let selected_index = self.selected_index();
@@ -121,7 +137,7 @@ impl View {
                 .split(full);
 
             if show_detail {
-                if let Some(sp) = selected_index.map(|i| sprocs[i]) {
+                if let Some(sp) = selected_index.map(|i| procs[i]) {
                     detail::render_detail(f, rects[0], sp, secs_per_sample);
                 }
             } else {
@@ -134,7 +150,7 @@ impl View {
                     .map(|c| c.constraint)
                     .collect();
 
-                let proc_table = ProcTable::build(sprocs, sort_by, &display_columns, &constraints);
+                let proc_table = ProcTable::build(&procs, sort_by, &display_columns, &constraints);
                 f.render_stateful_widget(proc_table, rects[0], table_state);
             }
 
@@ -192,5 +208,40 @@ impl ProcTable {
         Table::new(rows, constraints.iter().copied())
             .header(Row::new(header).style(Style::default().add_modifier(Modifier::UNDERLINED)))
             .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proc_with_cpu(pid: u32, cpu: f64) -> SProc {
+        let mut sp = SProc::blank(pid, "p");
+        sp.cpu_ewma = cpu;
+        sp
+    }
+
+    #[test]
+    fn hide_idle_filters_low_cpu_but_keeps_selected() {
+        let busy = proc_with_cpu(1, 50.0);
+        let idle = proc_with_cpu(2, 0.0);
+        let idle_selected = proc_with_cpu(3, 0.0);
+        let all = vec![&busy, &idle, &idle_selected];
+
+        let mut view = View::default(); // hide_idle on by default
+        let vis = view.visible(&all);
+        assert!(vis.iter().any(|s| s.pid == busy.pid));
+        assert!(!vis.iter().any(|s| s.pid == idle.pid));
+
+        // the selected process stays visible even while idle
+        view.state.selected = Some(idle_selected.pid);
+        assert!(view
+            .visible(&all)
+            .iter()
+            .any(|s| s.pid == idle_selected.pid));
+
+        // toggling hide_idle off shows everything
+        view.state.hide_idle = false;
+        assert_eq!(view.visible(&all).len(), 3);
     }
 }

@@ -8,7 +8,9 @@ use sysinfo::Pid;
 
 use crate::sproc::SProc;
 
-#[derive(Default)]
+/// CPU% below which a process is considered idle and hidden when hide_idle is on.
+pub const IDLE_CPU_PCT: f64 = 0.5;
+
 pub struct ViewState {
     pub sort_by: SortColumn,
     pub sort_dir: Dir,
@@ -17,8 +19,25 @@ pub struct ViewState {
     pub selected: Option<Pid>,
     /// Whether the full-screen process detail view is open.
     pub show_detail: bool,
+    /// Hide processes using ~no CPU, to cut clutter. On by default.
+    pub hide_idle: bool,
     pub should_quit: bool,
     action: Action,
+}
+
+impl Default for ViewState {
+    fn default() -> Self {
+        Self {
+            sort_by: SortColumn::default(),
+            sort_dir: Dir::default(),
+            displayed_columns: DisplayedColumns::default(),
+            selected: None,
+            show_detail: false,
+            hide_idle: true,
+            should_quit: false,
+            action: Action::default(),
+        }
+    }
 }
 
 impl ViewState {
@@ -29,6 +48,7 @@ impl ViewState {
         match (&self.action, key_event.code) {
             (_, KeyCode::Esc) => self.action = Top,
             (&Top, KeyCode::Char('q')) => self.should_quit = true,
+            (&Top, KeyCode::Char('i')) => self.hide_idle = !self.hide_idle,
             (&Top, KeyCode::Char(c)) => {
                 if let Some(a) = Action::action_from_char(c) {
                     self.action = a;
@@ -66,7 +86,10 @@ impl ViewState {
             return String::from("esc back  ↑↓ prev/next process  q quit");
         }
         match &self.action {
-            Action::Top => format!("{}  ↑↓ select  ⏎ details  q quit", Action::action_help()),
+            Action::Top => format!(
+                "{}  (i)dle  ↑↓ select  ⏎ details  q quit",
+                Action::action_help()
+            ),
             Action::SelectSort => format!("{}  (repeat to reverse)", Action::sort_col_help()),
             Action::ToggleColumn => Action::display_col_help(),
         }
