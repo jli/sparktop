@@ -5,8 +5,10 @@ use sysinfo::{CpuRefreshKind, Pid, ProcessRefreshKind, System, UpdateKind, Users
 
 use crate::sproc::{DeadStatus, SProc};
 
-/// Samples of recent per-core usage kept for the header sparklines.
-const CORE_HIST_LEN: usize = 16;
+/// Samples of recent per-core usage kept for the header sparklines. Generous
+/// so the graphs have data to fill the full terminal width (they expand to fit;
+/// see `view::core_lines`); excess samples beyond what's shown are just dropped.
+const CORE_HIST_LEN: usize = 256;
 
 pub struct SProcs {
     sys: System,

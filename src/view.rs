@@ -585,32 +585,38 @@ fn push_subtree<'a>(
     }
 }
 
-/// Width (in chars) reserved for each core's sparkline, regardless of how many
-/// samples have accumulated, so the grid doesn't reflow as history fills in.
-const CORE_SPARK_LEN: usize = 16;
+/// Minimum sparkline width (chars) used only to decide how many cores share a
+/// row; the bars then expand to fill the row's full width.
+const CORE_SPARK_MIN: usize = 16;
 /// Preferred cores per row (so an 8-core machine shows 4 per row, 2 rows);
 /// reduced to fit narrow terminals.
 const CORE_PER_ROW: usize = 4;
 
 /// Compact per-core usage sparklines for the header, drawn two terminal lines
 /// tall for extra vertical resolution: the bottom cell covers 0-50% and the top
-/// cell 50-100%, each colored by load. Cells are fixed width (bars grow from the
-/// right as history fills) and laid out in a balanced grid that targets
-/// CORE_PER_ROW per row but adapts to the terminal width and core count. Each
-/// grid row therefore emits two `Line`s (top half, then bottom half).
+/// cell 50-100%, each colored by load. Cores are laid out in a balanced grid
+/// that targets CORE_PER_ROW per row (adapting to terminal width and core
+/// count), and each cell's bars expand to fill its share of the row, so the
+/// graphs span the full available width. Each grid row emits two `Line`s (top
+/// half, then bottom half).
 fn core_lines(cores: &[Vec<f64>], width: u16) -> Vec<Line<'static>> {
     if cores.is_empty() {
         return Vec::new();
     }
+    let width = width as usize;
     let n = cores.len();
     let label_w = (n - 1).to_string().len();
-    let cell_w = label_w + 1 + CORE_SPARK_LEN + 1; // "N " + spark + gap
-    let fit = (width as usize / cell_w).max(1);
-    // target up to CORE_PER_ROW, capped by what fits and the core count, then
-    // balance evenly across the resulting number of rows
+    // per cell: "N " label + spark + trailing gap
+    let overhead = label_w + 1 + 1;
+    // pick cores-per-row: aim for CORE_PER_ROW, but only as many as fit with a
+    // readable minimum spark width, then balance evenly across the rows
+    let fit = (width / (overhead + CORE_SPARK_MIN)).max(1);
     let target = CORE_PER_ROW.min(fit).min(n);
     let rows = n.div_ceil(target);
     let per_row = n.div_ceil(rows);
+    // expand each cell to fill its share of the row so the bars span the width
+    let cell_w = (width / per_row).max(overhead + 1);
+    let spark_len = cell_w - overhead;
 
     // each core renders to a (top, bottom) pair of span rows
     let cells: Vec<(Vec<Span>, Vec<Span>)> = cores
@@ -624,14 +630,17 @@ fn core_lines(cores: &[Vec<f64>], width: u16) -> Vec<Line<'static>> {
                 format!("{i:>label_w$} "),
                 Style::default().fg(Color::DarkGray),
             )];
-            // right-align the bars in a fixed field: pad missing samples so the
-            // layout stays put while the history populates
-            let shown = samples.len().min(CORE_SPARK_LEN);
-            for _ in 0..CORE_SPARK_LEN - shown {
+            // show the most-recent `spark_len` samples, right-aligned: pad the
+            // left with blanks so the newest is on the right edge and the layout
+            // stays put while history fills (a given column is the same instant
+            // across every core and the list graphs -- see render_cpu_history)
+            let shown = samples.len().min(spark_len);
+            let recent = &samples[samples.len() - shown..];
+            for _ in 0..spark_len - shown {
                 top.push(Span::raw(" "));
                 bottom.push(Span::raw(" "));
             }
-            for &v in samples.iter().take(CORE_SPARK_LEN) {
+            for &v in recent {
                 let frac = (v / 100.0).clamp(0.0, 1.0);
                 let color = render::heat(frac);
                 // split 0-100% across two rows: bottom = 0-50%, top = 50-100%
@@ -911,8 +920,8 @@ mod tests {
         let two: Vec<Vec<f64>> = (0..2).map(|_| vec![10.0]).collect();
         assert_eq!(core_lines(&two, 240).len(), 2);
 
-        // layout doesn't change as history fills (1 sample vs full)
-        let eight_full: Vec<Vec<f64>> = (0..8).map(|_| vec![10.0; CORE_SPARK_LEN]).collect();
+        // layout doesn't change as history fills (1 sample vs many)
+        let eight_full: Vec<Vec<f64>> = (0..8).map(|_| vec![10.0; 200]).collect();
         assert_eq!(
             core_lines(&eight, 240).len(),
             core_lines(&eight_full, 240).len()
@@ -922,6 +931,23 @@ mod tests {
         assert!(core_lines(&eight, 40).len() > 4);
 
         assert!(core_lines(&[], 80).is_empty());
+    }
+
+    #[test]
+    fn core_graphs_fill_available_width() {
+        // 4 cores with ample history: the bars expand to fill (nearly) the whole
+        // terminal width, not a fixed narrow field.
+        let cores: Vec<Vec<f64>> = (0..4).map(|_| vec![50.0; 200]).collect();
+        let lines = core_lines(&cores, 200);
+        let line_w = |l: &Line| {
+            l.spans
+                .iter()
+                .map(|s| s.content.chars().count())
+                .sum::<usize>()
+        };
+        // 4 cores fit in one row (two Lines tall); each spans its full share
+        let w = line_w(&lines[0]);
+        assert!(w > 180 && w <= 200, "expected near-full width, got {}", w);
     }
 
     #[test]
