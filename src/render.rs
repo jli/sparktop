@@ -1,4 +1,6 @@
 /// Rendering logic: turning metric histories into colored sparklines.
+use std::collections::VecDeque;
+
 use ratatui::{
     style::{Color, Style},
     text::Span,
@@ -73,6 +75,30 @@ where
         }
     }
     rows
+}
+
+/// Render a process's CPU history as right-aligned multi-height sparkline rows,
+/// with the newest sample pinned to the rightmost column. `hist` is stored
+/// newest-first; we take the most-recent `width` samples and left-pad with
+/// blanks when there are fewer, so column N is always "N samples ago"
+/// regardless of how long the process has lived.
+///
+/// This enforces the alignment invariant: the right edge is always "now", so
+/// samples taken at the same time line up vertically across every row — for
+/// brand-new processes (which would otherwise grow left-to-right) and for dead
+/// processes (whose zero-padding then visibly marches the old activity leftward
+/// instead of leaving it pinned to the left edge).
+pub fn render_cpu_history(
+    hist: &VecDeque<f64>,
+    width: usize,
+    height: usize,
+) -> Vec<Vec<Span<'static>>> {
+    let n = hist.len().min(width);
+    let pad = width.saturating_sub(n);
+    // pad blanks (rendered as 0.0), then the most-recent `n` samples
+    // oldest-first so the newest lands on the right edge
+    let samples = std::iter::repeat_n(0.0, pad).chain(hist.iter().take(n).rev().copied());
+    render_vec_colored_multi(samples, 100., height)
 }
 
 /// Map `t` in [0, 1] to a low->high heat color: green -> yellow -> red.
@@ -204,6 +230,43 @@ mod tests {
         // a zero sample fills nothing
         let rows = render_vec_colored_multi([0.0].iter().copied(), 100., 3);
         assert!(rows.iter().all(|r| r[0].content.as_ref() == " "));
+    }
+
+    #[test]
+    fn cpu_history_right_aligns_newest_at_right_edge() {
+        // a single sample (a brand-new process) must sit at the rightmost
+        // column with blanks padding the left, not grow from the left.
+        let hist: VecDeque<f64> = [100.0].into();
+        let rows = render_cpu_history(&hist, 5, 1);
+        assert_eq!(rows.len(), 1);
+        let syms: Vec<&str> = rows[0].iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(syms, vec![" ", " ", " ", " ", "█"]);
+    }
+
+    #[test]
+    fn cpu_history_dead_process_shifts_left_as_zeros_accumulate() {
+        // a process spikes then dies; each dead tick pushes a zero sample to the
+        // front (newest). The old activity must march leftward, not stay pinned.
+        let mut hist: VecDeque<f64> = [100.0].into();
+        let marker_col = |h: &VecDeque<f64>| {
+            let rows = render_cpu_history(h, 5, 1);
+            rows[0].iter().position(|s| s.content.as_ref() == "█")
+        };
+        assert_eq!(marker_col(&hist), Some(4)); // newest at the right edge
+        hist.push_front(0.0); // one tick dead
+        assert_eq!(marker_col(&hist), Some(3)); // shifted one left
+        hist.push_front(0.0); // another tick
+        assert_eq!(marker_col(&hist), Some(2));
+    }
+
+    #[test]
+    fn cpu_history_full_buffer_fills_width_without_padding() {
+        // when there are at least `width` samples, every column is a real bar
+        // (no leading blanks beyond what the values themselves render).
+        let hist: VecDeque<f64> = vec![100.0; 8].into();
+        let rows = render_cpu_history(&hist, 5, 1);
+        let syms: Vec<&str> = rows[0].iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(syms, vec!["█", "█", "█", "█", "█"]);
     }
 
     #[test]

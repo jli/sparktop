@@ -797,13 +797,13 @@ impl ProcTable {
                 ),
                 Mem => heat_cell(render_bytes(sp.mem_bytes), sp.mem_bytes, max_mem, sp),
                 Cpu => heat_cell(render_metric(sp.cpu_ewma), sp.cpu_ewma, max_cpu, sp),
-                // most-recent samples, newest on the right (like the other
-                // graphs); taller bars add vertical resolution (one Line/row)
+                // most-recent samples, newest pinned to the right edge (so a
+                // given column is the same point in time across every row, and
+                // the right edge is always "now"); taller bars add vertical
+                // resolution (one Line per row).
                 CpuHistory => {
-                    // most-recent `hist_w` samples, reversed so newest is rightmost
-                    let samples = sp.cpu_hist.iter().take(hist_w).rev().copied();
                     let lines: Vec<Line> =
-                        render::render_vec_colored_multi(samples, 100., bar_height as usize)
+                        render::render_cpu_history(&sp.cpu_hist, hist_w, bar_height as usize)
                             .into_iter()
                             .map(Line::from)
                             .collect();
