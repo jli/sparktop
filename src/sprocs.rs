@@ -135,7 +135,7 @@ impl SProcs {
         }
     }
 
-    pub fn get(&self) -> Values<Pid, SProc> {
+    pub fn get(&self) -> Values<'_, Pid, SProc> {
         self.sprocs.values()
     }
 

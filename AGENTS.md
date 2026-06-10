@@ -138,7 +138,11 @@ tombstone) instead of splicing two different processes together.
   (cpu/memory/disk + user/cmd as `OnlyIfNotSet`). Broadening them regresses CPU
   use; rayon (`multithread`) is disabled in `Cargo.toml` for the same reason.
   Measure steady-state cost via cumulative cputime over a window, not `ps` %CPU
-  (which spikes exactly at the tick).
+  (which spikes exactly at the tick); `examples/refresh_cputime.rs` under
+  `/usr/bin/time -l` does exactly this.
+- The sysinfo **0.30 pin is deliberate**: newer versions (0.36–0.39) cost ~8%
+  more cputime per tick. Measurements, methodology, and verified migration
+  notes are in `docs/sysinfo-upgrade-perf.md` — read it before bumping.
 
 ### Functional core, imperative shell
 

@@ -952,7 +952,7 @@ mod tests {
             sp.cpu_ewma = cpu;
             sp
         };
-        let procs = vec![
+        let procs = [
             mk(1, "launchd", None, 0.0),
             mk(2, "loginwindow", Some(1), 0.0),
             mk(3, "WindowServer", Some(2), 40.0),
