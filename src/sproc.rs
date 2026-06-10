@@ -24,6 +24,11 @@ pub struct SProc {
     pub threads: usize,
     /// seconds the process has been running
     pub run_secs: u64,
+    /// process start time (seconds since epoch). Pids get reused by the OS;
+    /// a same-pid process with a different start time is a *different*
+    /// process, and `SProcs::update` replaces the record instead of splicing
+    /// the two processes' histories together.
+    pub start_time: u64,
     pub cpu_ewma: f64,
     pub cpu_hist: VecDeque<f64>,
     /// slow-decaying "sustained" CPU EWMA used for rank inertia (see
@@ -54,6 +59,14 @@ struct Tombstone {
 impl SProc {
     pub fn is_dead(&self) -> bool {
         self.tombstone.is_some()
+    }
+
+    /// Clear the tombstone: the pid showed up in a refresh again. The caller
+    /// has already checked `start_time`, so this is the same process (e.g. a
+    /// refresh transiently missed it), not a reused pid. A later death starts
+    /// a fresh tombstone rather than resuming the old count.
+    pub fn revive(&mut self) {
+        self.tombstone = None;
     }
 
     pub fn add_sample(&mut self, p: &Process, ewma_weight: f64) {
@@ -122,6 +135,7 @@ impl SProc {
             state: status_char(p.status()),
             threads: p.tasks().map_or(0, |t| t.len()),
             run_secs: p.run_time(),
+            start_time: p.start_time(),
             cpu_ewma: p.cpu_usage().into(),
             cpu_hist: vec![p.cpu_usage().into()].into(),
             cpu_rank: 0.0, // start low; climbs only with sustained usage
@@ -159,6 +173,7 @@ impl SProc {
             state: ' ',
             threads: members.iter().map(|m| m.threads).sum(),
             run_secs: members.iter().map(|m| m.run_secs).max().unwrap_or(0),
+            start_time: rep.start_time,
             cpu_ewma: members.iter().map(|m| m.cpu_ewma).sum(),
             cpu_hist: sum_hist(members, |m| &m.cpu_hist),
             cpu_rank: members.iter().map(|m| m.cpu_rank).sum(),
@@ -228,6 +243,7 @@ impl SProc {
             state: 'R',
             threads: 1,
             run_secs: 0,
+            start_time: 0,
             cpu_ewma: 0.0,
             cpu_hist: VecDeque::new(),
             cpu_rank: 0.0,
@@ -275,6 +291,26 @@ mod tests {
         }
         assert!(sp.cpu_rank > 60.0, "sustained load climbs the rank");
         assert!(sp.cpu_rank > after_one);
+    }
+
+    #[test]
+    fn revival_clears_tombstone_and_restarts_dead_count() {
+        let mut sp = SProc::blank(1, "t");
+        for _ in 0..SAMPLE_LIMIT {
+            sp.add_dead_sample(1.0);
+        }
+        assert!(sp.is_dead());
+
+        // the pid shows up in a refresh again (same start_time = same process)
+        sp.revive();
+        assert!(!sp.is_dead(), "live again after revival");
+
+        // dying later starts a fresh tombstone — it isn't reaped early by
+        // resuming the old dead-for count
+        assert!(matches!(
+            sp.add_dead_sample(1.0),
+            DeadStatus::StillFreshlyDead
+        ));
     }
 
     #[test]

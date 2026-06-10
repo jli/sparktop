@@ -4,12 +4,13 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use ordered_float::OrderedFloat as OrdFloat;
 use ratatui::{
+    backend::Backend,
     crossterm::event::{KeyCode, KeyEvent},
     layout::{Alignment, Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Cell, Paragraph, Row, Table, TableState},
-    DefaultTerminal,
+    Terminal,
 };
 use sysinfo::Pid;
 
@@ -45,9 +46,13 @@ pub struct View {
     /// dipped below the idle threshold; keeps it from flickering out of the
     /// list the moment its smoothed CPU drops.
     keep_alive: HashMap<Pid, u8>,
+    /// display-mode bits as of the last draw (filter, hide_idle, tree,
+    /// aggregate); when these change, the wave of rows entering the visible
+    /// set isn't flashed — they're not new processes, just newly shown.
+    last_vis_mode: Option<(String, bool, bool, bool)>,
 }
 
-/// How many draws a newly-appeared row stays highlighted as it fades out.
+/// How many ticks a newly-appeared row stays highlighted as it fades out.
 const FLASH_TICKS: u8 = 6;
 
 /// Once a process has been active, keep showing it for at least this many ticks
@@ -61,6 +66,15 @@ impl View {
             secs_per_sample,
             ..Default::default()
         }
+    }
+
+    /// Advance per-tick bookkeeping: the keep-alive grace window and the
+    /// new-row flash fade. Must be called once per sample tick, alongside
+    /// `SProcs::update` — never per draw, since draws also happen on every
+    /// keypress and would burn the counters down in a fraction of a tick.
+    pub fn tick(&mut self, sprocs: &[&SProc]) {
+        self.update_keep_alive(sprocs);
+        self.fade_flashes();
     }
 
     /// True when the CPU sort is using the slow sustained `cpu_rank` metric
@@ -131,8 +145,8 @@ impl View {
 
     /// Advance the grace window: any process at/above the idle threshold resets
     /// its window to KEEP_ALIVE_TICKS; everything else ages by one and is dropped
-    /// once it expires (or the process is gone). Call once per draw, before
-    /// `visible`, so a briefly-busy process lingers instead of flickering out.
+    /// once it expires (or the process is gone). Called from `tick`, so a
+    /// briefly-busy process lingers instead of flickering out.
     fn update_keep_alive(&mut self, sprocs: &[&SProc]) {
         for &sp in sprocs {
             if sp.cpu_ewma >= IDLE_CPU_PCT {
@@ -330,19 +344,20 @@ impl View {
     }
 
     /// Mark rows that just entered the visible set so they can flash. The first
-    /// population (startup) is not flashed.
-    fn note_new_rows(&mut self, current: &HashSet<Pid>) {
-        if !self.seen.is_empty() {
-            for &pid in current {
+    /// population (startup) is not flashed, and neither is a `suppress`ed draw
+    /// (a display-mode toggle that floods the set with already-running rows).
+    fn note_new_rows(&mut self, current: HashSet<Pid>, suppress: bool) {
+        if !self.seen.is_empty() && !suppress {
+            for &pid in &current {
                 if !self.seen.contains(&pid) {
                     self.flash.insert(pid, FLASH_TICKS);
                 }
             }
         }
-        self.seen = current.clone();
+        self.seen = current;
     }
 
-    /// Age out the flash highlights by one draw.
+    /// Age out the flash highlights by one tick.
     fn fade_flashes(&mut self) {
         self.flash.retain(|_, n| {
             *n = n.saturating_sub(1);
@@ -350,14 +365,16 @@ impl View {
         });
     }
 
-    pub fn draw(
+    pub fn draw<B>(
         &mut self,
-        terminal: &mut DefaultTerminal,
+        terminal: &mut Terminal<B>,
         summary: &SysSummary,
         sprocs: &[&SProc],
-    ) -> Result<()> {
-        // advance the post-activity grace window before deciding what's visible
-        self.update_keep_alive(sprocs);
+    ) -> Result<()>
+    where
+        B: Backend,
+        B::Error: Send + Sync + 'static,
+    {
         let visible = self.visible(sprocs);
         // aggregate mode replaces the rows with summed per-name synthetics;
         // they're owned here and borrowed for the rest of the draw.
@@ -372,7 +389,17 @@ impl View {
             visible
         };
         let current_pids: HashSet<Pid> = procs.iter().map(|p| p.pid).collect();
-        self.note_new_rows(&current_pids);
+        // a display-mode change floods the visible set with rows that aren't
+        // actually new processes; don't flash those
+        let vis_mode = (
+            self.state.filter.clone(),
+            self.state.hide_idle,
+            self.state.tree,
+            self.state.aggregate,
+        );
+        let mode_changed = self.last_vis_mode.as_ref() != Some(&vis_mode);
+        self.last_vis_mode = Some(vis_mode);
+        self.note_new_rows(current_pids, mode_changed);
         // each row carries a tree-indent prefix ("" in flat mode).
         // aggregate rows have no parents, so they always use the flat path.
         let rows: Vec<(&SProc, String)> = if self.state.tree && !self.state.aggregate {
@@ -441,13 +468,13 @@ impl View {
                     .iter()
                     .map(|c| if let Constraint::Length(n) = c { *n } else { 0 })
                     .sum();
-                let hist_w = main
-                    .width
-                    .saturating_sub(fixed + constraints.len() as u16)
-                    .max(1) as usize;
+                // one spacing column between adjacent columns: len-1 gaps
+                // (column_spacing is pinned to 1 where the Table is built)
+                let gaps = constraints.len().saturating_sub(1) as u16;
+                let hist_w = main.width.saturating_sub(fixed + gaps).max(1) as usize;
 
                 let header = display_columns.header(&sort_by, sort_dir);
-                let proc_table = ProcTable::build(
+                let proc_table = build_proc_table(
                     &rows,
                     header,
                     &display_columns,
@@ -469,7 +496,6 @@ impl View {
                 footer_area,
             );
         })?;
-        self.fade_flashes();
         Ok(())
     }
 }
@@ -718,125 +744,171 @@ struct Highlights<'a> {
     selected: Option<Pid>,
 }
 
-struct ProcTable();
+fn build_proc_table<'a>(
+    rows_data: &'a [(&'a SProc, String)],
+    header: Vec<String>,
+    display_columns: &DisplayedColumns,
+    constraints: &'a [Constraint],
+    bar_height: u16,
+    hist_w: usize,
+    hl: &Highlights,
+) -> Table<'a> {
+    use DisplayColumn::*;
 
-impl ProcTable {
-    fn build<'a>(
-        rows_data: &'a [(&'a SProc, String)],
-        header: Vec<String>,
-        display_columns: &DisplayedColumns,
-        constraints: &'a [Constraint],
-        bar_height: u16,
-        hist_w: usize,
-        hl: &Highlights,
-    ) -> Table<'a> {
-        use DisplayColumn::*;
+    let vdcols = display_columns.shown();
 
-        let vdcols = display_columns.shown();
+    // per-column maxima (over visible procs) so each numeric column can be
+    // shaded relative to its own scale -- big values pop in every column
+    let col_max = |f: fn(&SProc) -> f64| rows_data.iter().map(|r| f(r.0)).fold(0.0, f64::max);
+    let max_cpu = col_max(|sp| sp.cpu_ewma);
+    let max_mem = col_max(|sp| sp.mem_bytes);
+    let max_dr = col_max(|sp| sp.disk_read_ewma);
+    let max_dw = col_max(|sp| sp.disk_write_ewma);
+    let max_disk = col_max(|sp| sp.disk_read_ewma + sp.disk_write_ewma);
 
-        // per-column maxima (over visible procs) so each numeric column can be
-        // shaded relative to its own scale -- big values pop in every column
-        let col_max = |f: fn(&SProc) -> f64| rows_data.iter().map(|r| f(r.0)).fold(0.0, f64::max);
-        let max_cpu = col_max(|sp| sp.cpu_ewma);
-        let max_mem = col_max(|sp| sp.mem_bytes);
-        let max_dr = col_max(|sp| sp.disk_read_ewma);
-        let max_dw = col_max(|sp| sp.disk_write_ewma);
-        let max_disk = col_max(|sp| sp.disk_read_ewma + sp.disk_write_ewma);
-
-        let rows = rows_data.iter().map(move |row| {
-            let sp = row.0;
-            let prefix = row.1.as_str();
-            let mut liveness_style = Style::default();
-            if sp.is_dead() {
-                liveness_style = liveness_style.fg(Color::Red);
-            }
-            // freshly-appeared rows get an amber wash on just the name (below),
-            // fading to black over their remaining ticks, so newer arrivals are
-            // brighter than older ones.
-            let flash_bg = hl.flash.get(&sp.pid).map(|&ticks| {
-                let t = ticks as f32 / FLASH_TICKS as f32;
-                let amber = |v: f32| (v * t).round() as u8;
-                Color::Rgb(amber(110.0), amber(90.0), amber(30.0))
-            });
-            let is_selected = hl.selected == Some(sp.pid);
-            let values = vdcols.iter().map(|c| match c.column {
-                Pid => Cell::from(Span::styled(sp.pid.to_string(), liveness_style)),
-                User => Cell::from(Span::styled(sp.user.clone(), liveness_style)),
-                State => {
-                    let style = render::state_color(sp.state)
-                        .map_or_else(Style::default, |c| Style::default().fg(c));
-                    Cell::from(Span::styled(sp.state.to_string(), style))
-                }
-                ProcessName => {
-                    // dim tree-indent prefix (never highlighted), then the name.
-                    // the flash wash and selection reverse-video apply only to
-                    // the name span so the indent guides stay readable.
-                    let mut spans = Vec::new();
-                    if !prefix.is_empty() {
-                        spans.push(Span::styled(
-                            prefix.to_string(),
-                            Style::default().fg(Color::DarkGray),
-                        ));
-                    }
-                    let mut name_style = liveness_style;
-                    if let Some(bg) = flash_bg {
-                        name_style = name_style.bg(bg);
-                    }
-                    if is_selected {
-                        name_style = name_style.add_modifier(Modifier::REVERSED);
-                    }
-                    spans.push(Span::styled(sp.name.clone(), name_style));
-                    Cell::from(Line::from(spans))
-                }
-                Disk => {
-                    let v = sp.disk_read_ewma + sp.disk_write_ewma;
-                    heat_cell(render_bytes(v), v, max_disk, sp)
-                }
-                DiskRead => heat_cell(
-                    render_bytes(sp.disk_read_ewma),
-                    sp.disk_read_ewma,
-                    max_dr,
-                    sp,
-                ),
-                DiskWrite => heat_cell(
-                    render_bytes(sp.disk_write_ewma),
-                    sp.disk_write_ewma,
-                    max_dw,
-                    sp,
-                ),
-                Mem => heat_cell(render_bytes(sp.mem_bytes), sp.mem_bytes, max_mem, sp),
-                Cpu => heat_cell(render_metric(sp.cpu_ewma), sp.cpu_ewma, max_cpu, sp),
-                // most-recent samples, newest pinned to the right edge (so a
-                // given column is the same point in time across every row, and
-                // the right edge is always "now"); taller bars add vertical
-                // resolution (one Line per row).
-                CpuHistory => {
-                    let lines: Vec<Line> =
-                        render::render_cpu_history(&sp.cpu_hist, hist_w, bar_height as usize)
-                            .into_iter()
-                            .map(Line::from)
-                            .collect();
-                    Cell::from(Text::from(lines))
-                }
-            });
-            Row::new(values).height(bar_height)
+    let rows = rows_data.iter().map(move |row| {
+        let sp = row.0;
+        let prefix = row.1.as_str();
+        let mut liveness_style = Style::default();
+        if sp.is_dead() {
+            liveness_style = liveness_style.fg(Color::Red);
+        }
+        // freshly-appeared rows get an amber wash on just the name (below),
+        // fading to black over their remaining ticks, so newer arrivals are
+        // brighter than older ones.
+        let flash_bg = hl.flash.get(&sp.pid).map(|&ticks| {
+            let t = ticks as f32 / FLASH_TICKS as f32;
+            let amber = |v: f32| (v * t).round() as u8;
+            Color::Rgb(amber(110.0), amber(90.0), amber(30.0))
         });
+        let is_selected = hl.selected == Some(sp.pid);
+        let values = vdcols.iter().map(|c| match c.column {
+            Pid => Cell::from(Span::styled(sp.pid.to_string(), liveness_style)),
+            User => Cell::from(Span::styled(sp.user.clone(), liveness_style)),
+            State => {
+                let style = render::state_color(sp.state)
+                    .map_or_else(Style::default, |c| Style::default().fg(c));
+                Cell::from(Span::styled(sp.state.to_string(), style))
+            }
+            ProcessName => {
+                // dim tree-indent prefix (never highlighted), then the name.
+                // the flash wash and selection reverse-video apply only to
+                // the name span so the indent guides stay readable.
+                let mut spans = Vec::new();
+                if !prefix.is_empty() {
+                    spans.push(Span::styled(
+                        prefix.to_string(),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                let mut name_style = liveness_style;
+                if let Some(bg) = flash_bg {
+                    name_style = name_style.bg(bg);
+                }
+                if is_selected {
+                    name_style = name_style.add_modifier(Modifier::REVERSED);
+                }
+                spans.push(Span::styled(sp.name.clone(), name_style));
+                Cell::from(Line::from(spans))
+            }
+            Disk => {
+                let v = sp.disk_read_ewma + sp.disk_write_ewma;
+                heat_cell(render_bytes(v), v, max_disk, sp)
+            }
+            DiskRead => heat_cell(
+                render_bytes(sp.disk_read_ewma),
+                sp.disk_read_ewma,
+                max_dr,
+                sp,
+            ),
+            DiskWrite => heat_cell(
+                render_bytes(sp.disk_write_ewma),
+                sp.disk_write_ewma,
+                max_dw,
+                sp,
+            ),
+            Mem => heat_cell(render_bytes(sp.mem_bytes), sp.mem_bytes, max_mem, sp),
+            Cpu => heat_cell(render_metric(sp.cpu_ewma), sp.cpu_ewma, max_cpu, sp),
+            // most-recent samples, newest pinned to the right edge (so a
+            // given column is the same point in time across every row, and
+            // the right edge is always "now"); taller bars add vertical
+            // resolution (one Line per row).
+            CpuHistory => {
+                let lines: Vec<Line> =
+                    render::render_cpu_history(&sp.cpu_hist, hist_w, bar_height as usize)
+                        .into_iter()
+                        .map(Line::from)
+                        .collect();
+                Cell::from(Text::from(lines))
+            }
+        });
+        Row::new(values).height(bar_height)
+    });
 
-        // Selection highlighting is applied to the name span (above), not the
-        // whole row; TableState still drives auto-scroll to keep it visible.
-        Table::new(rows, constraints.iter().copied())
-            .header(Row::new(header).style(Style::default().add_modifier(Modifier::UNDERLINED)))
-    }
+    // Selection highlighting is applied to the name span (above), not the
+    // whole row; TableState still drives auto-scroll to keep it visible.
+    // column_spacing is pinned so the hist_w gap math above stays honest.
+    Table::new(rows, constraints.iter().copied())
+        .column_spacing(1)
+        .header(Row::new(header).style(Style::default().add_modifier(Modifier::UNDERLINED)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use ratatui::backend::TestBackend;
+
     fn proc_with_cpu(pid: u32, cpu: f64) -> SProc {
         let mut sp = SProc::blank(pid, "p");
         sp.cpu_ewma = cpu;
         sp
+    }
+
+    fn test_summary() -> SysSummary {
+        SysSummary {
+            cpu_pct: 0.0,
+            mem_used: 0,
+            mem_total: 1,
+            swap_used: 0,
+            swap_total: 0,
+            load: (0.0, 0.0, 0.0),
+            uptime: 0,
+            tasks: 0,
+            cores: vec![],
+        }
+    }
+
+    /// Render a full frame to a TestBackend and return its rows as strings.
+    fn draw_to_rows(v: &mut View, sprocs: &[&SProc], w: u16, h: u16) -> Vec<String> {
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        v.draw(&mut term, &test_summary(), sprocs).unwrap();
+        let buf = term.backend().buffer();
+        buf.content()
+            .chunks(buf.area.width as usize)
+            .map(|row| row.iter().map(|c| c.symbol()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn cpu_history_newest_sample_lands_on_terminal_right_edge() {
+        // A process whose only (newest) sample is 100% must render that bar in
+        // the very last terminal column — the right edge is "now" (AGENTS.md
+        // time-alignment invariant), with no gap from over-counting column
+        // spacing.
+        let mut sp = SProc::blank(1, "busyproc");
+        sp.cpu_ewma = 50.0;
+        sp.cpu_hist = [100.0].into();
+        let rows = draw_to_rows(&mut View::default(), &[&sp], 80, 10);
+        let row = rows
+            .iter()
+            .find(|r| r.contains("busyproc"))
+            .expect("process row rendered");
+        assert_eq!(
+            row.chars().last(),
+            Some('█'),
+            "newest sample pinned to the right edge, row: {row:?}"
+        );
     }
 
     /// A view that ranks by the instant CPU metric, for tests that exercise
@@ -1189,19 +1261,18 @@ mod tests {
         assert_eq!(chrome.pid.as_u32(), 1); // lowest pid (the main process)
     }
 
+    fn pids(ids: &[u32]) -> HashSet<Pid> {
+        ids.iter().map(|&i| Pid::from(i as usize)).collect()
+    }
+
     #[test]
     fn new_rows_flash_then_fade() {
-        let pids = |ids: &[u32]| {
-            ids.iter()
-                .map(|&i| Pid::from(i as usize))
-                .collect::<HashSet<_>>()
-        };
         let mut v = View::default();
 
-        v.note_new_rows(&pids(&[1, 2]));
+        v.note_new_rows(pids(&[1, 2]), false);
         assert!(v.flash.is_empty(), "first population doesn't flash");
 
-        v.note_new_rows(&pids(&[1, 2, 3]));
+        v.note_new_rows(pids(&[1, 2, 3]), false);
         assert!(v.flash.contains_key(&Pid::from(3usize)), "new pid flashes");
         assert!(
             !v.flash.contains_key(&Pid::from(1usize)),
@@ -1209,9 +1280,47 @@ mod tests {
         );
 
         for _ in 0..FLASH_TICKS {
-            v.fade_flashes();
+            v.tick(&[]);
         }
         assert!(v.flash.is_empty(), "flash fades after FLASH_TICKS");
+    }
+
+    #[test]
+    fn mode_toggle_wave_does_not_flash() {
+        let mut v = View::default();
+        v.note_new_rows(pids(&[1]), false);
+        // e.g. hide_idle toggled off: a wave of already-running rows becomes
+        // visible at once — suppressed, they aren't new processes
+        v.note_new_rows(pids(&[1, 2, 3]), true);
+        assert!(v.flash.is_empty(), "mode-toggle wave doesn't flash");
+        // a genuinely new pid on a normal draw still flashes
+        v.note_new_rows(pids(&[1, 2, 3, 4]), false);
+        assert_eq!(v.flash.len(), 1);
+        assert!(v.flash.contains_key(&Pid::from(4usize)));
+    }
+
+    #[test]
+    fn draws_between_ticks_dont_age_grace_window_or_flash() {
+        // draws happen on every keypress; only ticks may age the counters,
+        // or holding an arrow key would expire them in a fraction of a tick.
+        let mut v = View::default(); // hide_idle on by default
+        let busy = proc_with_cpu(1, 50.0);
+        v.tick(&[&busy]); // arms the grace window
+        v.flash.insert(Pid::from(2usize), FLASH_TICKS);
+
+        let idle = proc_with_cpu(1, 0.0);
+        for _ in 0..(KEEP_ALIVE_TICKS as usize * 3) {
+            draw_to_rows(&mut v, &[&idle], 80, 24);
+        }
+        assert!(
+            v.visible(&[&idle]).iter().any(|s| s.pid == idle.pid),
+            "grace window survives draws between ticks"
+        );
+        assert_eq!(
+            v.flash.get(&Pid::from(2usize)),
+            Some(&FLASH_TICKS),
+            "flash counter survives draws between ticks"
+        );
     }
 
     #[test]
@@ -1309,14 +1418,14 @@ mod tests {
         let idle = proc_with_cpu(2, 0.0);
 
         // while active it's shown; the always-idle one is hidden
-        v.update_keep_alive(&[&busy, &idle]);
+        v.tick(&[&busy, &idle]);
         let vis = v.visible(&[&busy, &idle]);
         assert!(vis.iter().any(|s| s.pid == busy.pid));
         assert!(!vis.iter().any(|s| s.pid == idle.pid));
 
         // it dips to idle -> must linger, not vanish on the very next tick
         let now_idle = proc_with_cpu(1, 0.0);
-        v.update_keep_alive(&[&now_idle, &idle]);
+        v.tick(&[&now_idle, &idle]);
         assert!(
             v.visible(&[&now_idle, &idle])
                 .iter()
@@ -1327,8 +1436,8 @@ mod tests {
         // ...and never flickers back out while it keeps getting brief spikes
         for _ in 0..KEEP_ALIVE_TICKS * 2 {
             let spike = proc_with_cpu(1, 50.0);
-            v.update_keep_alive(&[&spike, &idle]);
-            v.update_keep_alive(&[&now_idle, &idle]); // idle tick in between
+            v.tick(&[&spike, &idle]);
+            v.tick(&[&now_idle, &idle]); // idle tick in between
             assert!(
                 v.visible(&[&now_idle, &idle])
                     .iter()
@@ -1339,7 +1448,7 @@ mod tests {
 
         // once it stays idle past the grace window it finally drops out
         for _ in 0..KEEP_ALIVE_TICKS {
-            v.update_keep_alive(&[&now_idle, &idle]);
+            v.tick(&[&now_idle, &idle]);
         }
         assert!(
             !v.visible(&[&now_idle, &idle])

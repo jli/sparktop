@@ -1,5 +1,8 @@
 /// SProcs: a collection of all processes on the system.
-use std::collections::{hash_map::Values, HashMap, VecDeque};
+use std::collections::{
+    hash_map::{Entry, Values},
+    HashMap, VecDeque,
+};
 
 use sysinfo::{CpuRefreshKind, Pid, ProcessRefreshKind, System, UpdateKind, Users};
 
@@ -81,20 +84,34 @@ impl SProcs {
                 .with_cmd(UpdateKind::OnlyIfNotSet),
         );
         let users = &self.users;
+        let user_of = |proc: &sysinfo::Process| {
+            proc.user_id()
+                .and_then(|uid| users.get_user_by_id(uid))
+                .map(|u| u.name().to_string())
+                .unwrap_or_else(|| "?".to_string())
+        };
         let latest_procs = self.sys.processes();
         for (&pid, proc) in latest_procs {
             log::debug!("handling {} {} {}", pid, proc.name(), proc.cpu_usage());
-            self.sprocs
-                .entry(pid)
-                .and_modify(|sp| sp.add_sample(proc, ewma_weight))
-                .or_insert_with(|| {
-                    let user = proc
-                        .user_id()
-                        .and_then(|uid| users.get_user_by_id(uid))
-                        .map(|u| u.name().to_string())
-                        .unwrap_or_else(|| "?".to_string());
-                    SProc::new(proc, user)
-                });
+            match self.sprocs.entry(pid) {
+                Entry::Occupied(mut e) => {
+                    let sp = e.get_mut();
+                    if sp.start_time != proc.start_time() {
+                        // the OS reused the pid for a different process:
+                        // replace the record (identity, history, tombstone)
+                        // rather than splicing two processes together
+                        *sp = SProc::new(proc, user_of(proc));
+                    } else {
+                        // same process; if it was tombstoned (a refresh
+                        // transiently missed it), it's demonstrably alive
+                        sp.revive();
+                        sp.add_sample(proc, ewma_weight);
+                    }
+                }
+                Entry::Vacant(v) => {
+                    v.insert(SProc::new(proc, user_of(proc)));
+                }
+            }
         }
 
         // TODO: do this more concisely.

@@ -28,7 +28,11 @@ The main loop (`bin/sparktop.rs`) is single-threaded:
 
 - `event::poll(timeout)` blocks for input up to the next tick deadline; key
   presses go to `view.handle_key`, resizes are handled implicitly by the next
-  draw, and each tick deadline calls `sprocs.update`.
+  draw, and each tick deadline calls `sprocs.update` then `view.tick`.
+- **Ticks and draws are different clocks.** Draws also happen on every
+  keypress, so anything counted in ticks (flash fade, the keep-alive grace
+  window) must advance only in `View::tick`, never in `draw` — otherwise
+  holding an arrow key burns the counters down in a fraction of a tick.
 - `SProcs` (sprocs.rs) wraps sysinfo's `System`, holds every process in a
   `HashMap<Pid, SProc>`, applies EWMA smoothing, and keeps tombstones for dead
   processes so they fade out before removal.
@@ -118,6 +122,11 @@ the `instant_view()` helper to opt out of the sustained default.
 Selection (`ViewState.selected`), the flash set, and the keep-alive grace window
 are all keyed by `Pid`, so they survive re-sorts and filtering. Never cache a
 selected *row index* across a draw.
+
+Pid alone isn't identity *across time*, though: the OS reuses pids.
+`SProc.start_time` disambiguates — when a pid reappears with a different start
+time, `SProcs::update` replaces the whole record (identity, histories,
+tombstone) instead of splicing two different processes together.
 
 ### sysinfo usage
 

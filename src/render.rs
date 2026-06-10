@@ -6,22 +6,6 @@ use ratatui::{
     text::Span,
 };
 
-pub fn render_vec_colored<'a, II>(xs: II, max: f64) -> Vec<Span<'a>>
-where
-    II: IntoIterator<Item = &'a f64>,
-{
-    let mut result = Vec::new();
-    for x in xs.into_iter() {
-        let p = *x / max;
-        let c = float_bar(p);
-        match cpu_color(*x) {
-            Some(color) => result.push(Span::styled(c.to_string(), Style::default().fg(color))),
-            None => result.push(Span::raw(c.to_string())),
-        }
-    }
-    result
-}
-
 /// Format a duration in seconds compactly (e.g. "3d4h", "5h2m", "12m").
 pub fn fmt_uptime(secs: u64) -> String {
     let (d, h, m) = (secs / 86400, (secs % 86400) / 3600, (secs % 3600) / 60);
@@ -50,10 +34,11 @@ pub fn human_bytes(bytes: f64) -> String {
     }
 }
 
-/// Like `render_vec_colored`, but spreads each bar across `height` rows. Each
-/// row represents one full `max` (i.e. 100%), so a value of `max` fills exactly
-/// one line and values past `max` stack into the rows above -- making >100%
-/// (multi-core) usage visible. Returns one span-row per output line, top first.
+/// Render samples as colored sparkline bars, spreading each bar across
+/// `height` rows. Each row represents one full `max` (i.e. 100%), so a value
+/// of `max` fills exactly one line and values past `max` stack into the rows
+/// above -- making >100% (multi-core) usage visible. Returns one span-row per
+/// output line, top first.
 pub fn render_vec_colored_multi<II>(xs: II, max: f64, height: usize) -> Vec<Vec<Span<'static>>>
 where
     II: IntoIterator<Item = f64>,
@@ -165,17 +150,13 @@ pub fn cpu_color(cpu: f64) -> Option<Color> {
 const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 // f must be between 0 and 1.
-pub fn float_bar(mut f: f64) -> char {
-    f = f.min(1.); // cpu usage can be > 1. do something special?
+pub fn float_bar(f: f64) -> char {
+    let f = f.min(1.); // cpu usage can be > 1. do something special?
     if f < 0.03 {
         return ' ';
     }
-    let sub_seg = 1. / BARS.len() as f64;
-    let mut i = 0;
-    while f > sub_seg {
-        f -= sub_seg;
-        i += 1;
-    }
+    // ceil(f * 8) - 1 maps (0, 1/8] -> BARS[0], (1/8, 2/8] -> BARS[1], ...
+    let i = ((f * BARS.len() as f64).ceil() as usize).clamp(1, BARS.len()) - 1;
     BARS[i]
 }
 
@@ -197,20 +178,20 @@ mod tests {
     }
 
     #[test]
-    fn render_vec_maps_each_sample_to_one_bar() {
-        let hist = [0.0, 50.0, 100.0];
-        assert_eq!(render_vec_colored(hist.iter(), 100.).len(), 3);
+    fn float_bar_eighths_map_to_increasing_bars() {
+        assert_eq!(float_bar(0.125), '▁'); // top of the first eighth
+        assert_eq!(float_bar(0.13), '▂'); // just over it
+        assert_eq!(float_bar(0.5), '▄');
+        assert_eq!(float_bar(0.875), '▇');
+        assert_eq!(float_bar(0.876), '█');
     }
 
     #[test]
-    fn multi_height_matches_single_at_height_one() {
-        let hist = [0.0, 50.0, 100.0];
-        let single = render_vec_colored(hist.iter(), 100.);
-        let multi = render_vec_colored_multi(hist.iter().copied(), 100., 1);
+    fn multi_height_at_height_one_maps_each_sample_to_one_bar() {
+        let multi = render_vec_colored_multi([0.0, 50.0, 100.0].iter().copied(), 100., 1);
         assert_eq!(multi.len(), 1);
-        let multi_syms: Vec<_> = multi[0].iter().map(|s| s.content.to_string()).collect();
-        let single_syms: Vec<_> = single.iter().map(|s| s.content.to_string()).collect();
-        assert_eq!(multi_syms, single_syms);
+        let syms: Vec<_> = multi[0].iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(syms, vec![" ", "▄", "█"]);
     }
 
     #[test]

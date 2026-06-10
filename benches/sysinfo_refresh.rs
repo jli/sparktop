@@ -16,7 +16,9 @@
 //                         time:   [66.7 ms 67.2 ms 67.7 ms]
 // refresh_minimal         time:   [67.0 ms 67.6 ms 68.4 ms]
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
+
+use criterion::{criterion_group, criterion_main, Criterion};
 use sysinfo::{CpuRefreshKind, ProcessRefreshKind, System, UpdateKind};
 
 fn refresh_all(n: u64) {
