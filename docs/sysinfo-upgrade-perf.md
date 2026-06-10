@@ -19,13 +19,36 @@ quiet machine, ~660 processes, Apple Silicon, macOS 15, Rust 1.96:
 
 The ordering held in every interleaved round, on both a loaded and a quiet
 machine. The extra cost is almost entirely **sys time** (more kernel work per
-refresh), introduced somewhere in 0.31–0.36 (0.31 was a near-total rewrite of
-process refresh; 0.36 changed CPU-usage computation) and still present in
-0.39.3. Rust 1.86 → 1.96 alone had no measurable effect — it's sysinfo, not
-codegen.
+refresh) and still present in 0.39.3. Rust 1.86 → 1.96 alone had no measurable
+effect — it's sysinfo, not codegen.
 
 In absolute terms: +0.5 ms per 1 Hz tick, ~0.05% of one core. Real but small;
 revisit if upstream improves or if an upgrade becomes necessary.
+
+## Root cause (bisected + ablated, 2026-06-09)
+
+A per-version bisect (harness built against 0.30–0.36, interleaved cputime
+rounds) shows the jump lands exactly at **0.33 → 0.34**; 0.31–0.33 are at
+parity with 0.30. The culprit is upstream commit `62eb2b873` ("Fix macOS issue
+where a removed process was still listed", shipped in 0.34):
+
+- macOS can keep dead pids in `proc_listallpids`, so when
+  `proc_pidinfo(PROC_PIDTBSDINFO)` fails for a pid, 0.34+ double-checks the
+  process is alive via a forced `proc_pidpath` probe — **every refresh**.
+- But `PROC_PIDTBSDINFO` also fails (EPERM) for *live* processes you don't own.
+  Running unprivileged, that's every root/system process — ~250 of ~700 procs
+  on this machine — so the "is it dead?" probe misfires ~250×/tick, adding one
+  `proc_pidpath` syscall each (~0.9 µs apiece, all sys time).
+- Verified by instrumented counters (the forced branch runs ~248×/tick) and by
+  ablation: stubbing out just that branch in a vendored 0.34.2 returns cputime
+  to exact 0.33 parity (1.69 vs 1.70 vs stock-0.34's 1.90, in every
+  interleaved round). The branch is unchanged through 0.39.3.
+
+Implications: the regression scales with the number of *other users'*
+processes, so it would mostly vanish running as root (sparktop doesn't), and
+a future upstream fix is plausible — the probe could use `kill(pid, 0)`
+(cheaper liveness check) or cache "EPERM but alive" pids instead of re-probing
+every tick.
 
 ## How to measure (and how not to)
 

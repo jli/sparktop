@@ -140,9 +140,11 @@ tombstone) instead of splicing two different processes together.
   Measure steady-state cost via cumulative cputime over a window, not `ps` %CPU
   (which spikes exactly at the tick); `examples/refresh_cputime.rs` under
   `/usr/bin/time -l` does exactly this.
-- The sysinfo **0.30 pin is deliberate**: newer versions (0.36–0.39) cost ~8%
-  more cputime per tick. Measurements, methodology, and verified migration
-  notes are in `docs/sysinfo-upgrade-perf.md` — read it before bumping.
+- The sysinfo **0.30 pin is deliberate**: 0.34+ costs ~8% more cputime per
+  tick (a per-tick `proc_pidpath` liveness probe for every process whose
+  `PROC_PIDTBSDINFO` fails — i.e. every root process when unprivileged).
+  Measurements, root cause, and verified migration notes are in
+  `docs/sysinfo-upgrade-perf.md` — read it before bumping.
 
 ### Functional core, imperative shell
 
